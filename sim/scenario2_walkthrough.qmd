@@ -177,64 +177,27 @@ tmle_glm_rd_30 <- fit_glm$res_tmle$rd[30]
 tmle_glm_se_30 <- fit_glm$res_tmle$se_RD[30]
 
 # 4. Pure G-Computation with Nonparametric Survival BART
-# Prepare person-time training panel
 df_std <- prepare_tte_data(df)
 clones <- create_clones(df_std, covars = c("w1", "w2"), grace_period = 10, tau = 30)
-panel_bart <- clones %>%
-  mutate(n_int = pmax(ceiling(time_cc), 0L)) %>%
-  tidyr::uncount(weights = n_int, .id = "t") %>%
-  mutate(
-    event_cc_day = if_else(event_cc == 1L & time_cc > (t-1) & time_cc <= t, 1L, 0L),
-    is_treated = if_else(tx_ever == 1L & t >= t_switch, 1L, 0L)
-  )
-
-X_train_bart <- panel_bart %>% select(t, w1, w2, is_treated) %>% as.matrix()
-Y_train_bart <- panel_bart$event_cc_day
-
-# Counterfactual test grid:
-cf_base_bart <- df %>% select(id, w1, w2, tx_obs, tx_time_obs) %>%
-  tidyr::uncount(weights = 30, .id = "t")
-
-cf_ctrl_bart <- cf_base_bart %>% mutate(is_treated = 0L) %>% 
-  select(t, w1, w2, is_treated) %>% as.matrix()
-
-# Deterministic dynamic regime: non-compliers initiate at grace + 1 = 11
-cf_treat_bart <- cf_base_bart %>%
-  mutate(
-    t_sw = if_else(tx_obs == 1L & tx_time_obs <= 10, tx_time_obs, 11),
-    is_treated = if_else(t >= t_sw, 1L, 0L)
-  ) %>%
-  select(t, w1, w2, is_treated) %>% as.matrix()
 
 set.seed(42)
-bart_fit <- BART::mc.surv.bart(
-  x.train = X_train_bart,
-  y.train = Y_train_bart,
-  x.test  = rbind(cf_ctrl_bart, cf_treat_bart),
-  ntree = 50, ndpost = 200, nskip = 100, mc.cores = 2, seed = 42
+bart_res <- fit_bart_gcomp(
+  data = df_std,
+  clones = clones,
+  covars = c("w1", "w2"),
+  grace_period = 10,
+  tau = 30,
+  ntree = 50,
+  ndpost = 200,
+  nskip = 100,
+  mc.cores = 2,
+  seed = 42
 )
-
-n_cf <- nrow(cf_base_bart)
-bart_cf_res <- cf_base_bart %>%
-  mutate(
-    h_ctrl  = bart_fit$prob.test.mean[1:n_cf],
-    h_treat = bart_fit$prob.test.mean[(n_cf + 1):(2 * n_cf)]
-  ) %>%
-  arrange(id, t) %>%
-  group_by(id) %>%
-  mutate(
-    S_ctrl = cumprod(1 - h_ctrl),
-    S_treat = cumprod(1 - h_treat)
-  ) %>%
-  ungroup() %>%
-  group_by(t) %>%
-  summarise(
-    surv_ctrl = mean(S_ctrl),
-    surv_treat = mean(S_treat),
-    rd = surv_treat - surv_ctrl,
-    .groups = "drop"
-  )
-bart_rd_30 <- bart_cf_res$rd[30]
+bart_rd_30 <- bart_res$results$rd[30]
+bart_se_30 <- bart_res$results$se_RD[30]
+bart_cri_lower <- bart_res$results$cri_lower[30]
+bart_cri_upper <- bart_res$results$cri_upper[30]
+bart_width_30 <- bart_res$results$cri_width[30]
 
 # 6. TTE-TMLE with SuperLearner Ensemble (GLM + Earth + Ranger)
 set.seed(42)
@@ -258,6 +221,13 @@ tmle_sl_se_30 <- fit_sl$res_tmle$se_RD[30]
 
 ```{r results-table}
 #| code-summary: "Construct comparative performance table"
+# Compute interval bounds
+naive_ci <- c(naive_rd_30 - 1.96 * naive_se_30, naive_rd_30 + 1.96 * naive_se_30)
+lm_ci <- c(lm_rd_30 - 1.96 * lm_se_30, lm_rd_30 + 1.96 * lm_se_30)
+ccw_glm_ci <- c(ccw_glm_rd_30 - 1.96 * ccw_glm_se_30, ccw_glm_rd_30 + 1.96 * ccw_glm_se_30)
+tmle_glm_ci <- c(tmle_glm_rd_30 - 1.96 * tmle_glm_se_30, tmle_glm_rd_30 + 1.96 * tmle_glm_se_30)
+tmle_sl_ci <- c(tmle_sl_rd_30 - 1.96 * tmle_sl_se_30, tmle_sl_rd_30 + 1.96 * tmle_sl_se_30)
+
 results_df <- tibble(
   Estimator = c(
     "Naive Unadjusted KM",
@@ -271,18 +241,26 @@ results_df <- tibble(
   `True Value` = rep(truth_rd_30, 6),
   `Abs Bias` = `Estimate (RD 30)` - `True Value`,
   `Rel Bias (%)` = (`Abs Bias` / `True Value`) * 100,
-  `Standard Error` = c(naive_se_30, lm_se_30, ccw_glm_se_30, NA, tmle_glm_se_30, tmle_sl_sl_se <- tmle_sl_se_30),
-  `95% CI Width` = c(
-    1.96 * 2 * naive_se_30,
-    1.96 * 2 * lm_se_30,
-    1.96 * 2 * ccw_glm_se_30,
-    NA,
-    1.96 * 2 * tmle_glm_se_30,
-    1.96 * 2 * tmle_sl_se_30
+  `Standard Error` = c(naive_se_30, lm_se_30, ccw_glm_se_30, bart_se_30, tmle_glm_se_30, tmle_sl_se_30),
+  `95% Interval Width` = c(
+    as.character(round(naive_ci[2] - naive_ci[1], 4)),
+    as.character(round(lm_ci[2] - lm_ci[1], 4)),
+    as.character(round(ccw_glm_ci[2] - ccw_glm_ci[1], 4)),
+    paste0(round(bart_width_30, 4), "*"),
+    as.character(round(tmle_glm_ci[2] - tmle_glm_ci[1], 4)),
+    as.character(round(tmle_sl_ci[2] - tmle_sl_ci[1], 4))
+  ),
+  `95% Covered` = c(
+    if_else(truth_rd_30 >= naive_ci[1] & truth_rd_30 <= naive_ci[2], "Yes", "No"),
+    if_else(truth_rd_30 >= lm_ci[1] & truth_rd_30 <= lm_ci[2], "Yes", "No"),
+    if_else(truth_rd_30 >= ccw_glm_ci[1] & truth_rd_30 <= ccw_glm_ci[2], "Yes", "No"),
+    if_else(truth_rd_30 >= bart_cri_lower & truth_rd_30 <= bart_cri_upper, "Yes*", "No*"),
+    if_else(truth_rd_30 >= tmle_glm_ci[1] & truth_rd_30 <= tmle_glm_ci[2], "Yes", "No"),
+    if_else(truth_rd_30 >= tmle_sl_ci[1] & truth_rd_30 <= tmle_sl_ci[2], "Yes", "No")
   )
 )
 
-knitr::kable(results_df, digits = 4, caption = "Scenario 2 Performance Metrics at Day 30 Follow-Up")
+knitr::kable(results_df, digits = 4, caption = "Scenario 2 Performance Metrics at Day 30 Follow-Up (*Asterisk denotes Bayesian 95% Credible Interval from Survival-BART posterior draws)")
 ```
 
 ### 5.2 Key Takeaways on Double Robustness & Misspecification

@@ -89,6 +89,97 @@ compute_scenario1_truth <- function(n_oracle = 100000,
   return(truth_df)
 }
 
+#' Ground Truth Counterfactual Value Generator for Scenario 3 (Non-Proportional Hazards & Waning)
+#'
+#' @description Computes exact counterfactual survival curves and causal estimands
+#'   under Scenario 3 structural non-proportional hazards (HR = 0.20 for t <= 15; HR = 1.00 for t > 15).
+#'
+#' @param n_oracle Sample size for oracle counterfactual population (default 100,000).
+#' @param tau Maximum follow-up horizon (default 30).
+#' @param grace_period Maximum treatment initiation delay in days (default 10).
+#' @param t_wane Time at which efficacy wanes (default 15).
+#' @param shape Weibull shape parameter (default 1.5).
+#' @param base_scale Baseline scale parameter (default 40).
+#' @param coef_w Confounder effect on baseline hazard (default 0.5).
+#' @param hr_early Early treatment hazard ratio (default 0.20).
+#' @param hr_late Late/waned treatment hazard ratio (default 1.00).
+#' @param seed Random seed for reproducibility.
+#'
+#' @return A tibble with columns t, S0_true, S1_true, rd_true, hr_true.
+#' @export
+compute_scenario3_truth <- function(n_oracle = 100000,
+                                    tau = 30,
+                                    grace_period = 10,
+                                    t_wane = 15,
+                                    shape = 1.5,
+                                    base_scale = 40,
+                                    coef_w = 0.5,
+                                    hr_early = 0.20,
+                                    hr_late = 1.00,
+                                    seed = 99999) {
+  
+  if (!is.null(seed)) set.seed(seed)
+  
+  # 1. Baseline Confounder
+  x1 <- stats::rnorm(n_oracle, mean = 0, sd = 1)
+  scale_0 <- base_scale * exp(- (coef_w * x1) / shape)
+  
+  # 2. Strategy 0: Never Treat
+  u0 <- stats::runif(n_oracle)
+  h_target0 <- -log(u0)
+  t_event_0 <- scale_0 * (h_target0)^(1 / shape)
+  
+  # 3. Strategy 1: Treat <= Grace (dynamic initiation)
+  t_switch_1 <- sample(1:grace_period, size = n_oracle, replace = TRUE)
+  u1 <- stats::runif(n_oracle)
+  h_target1 <- -log(u1)
+  
+  h_at_switch <- (t_switch_1 / scale_0)^shape
+  h_at_wane_base <- (t_wane / scale_0)^shape
+  h_at_wane_actual <- h_at_switch + hr_early * (h_at_wane_base - h_at_switch)
+  
+  # Exact piecewise inversion
+  t_event_1 <- numeric(n_oracle)
+  
+  idx_pre <- which(h_target1 <= h_at_switch)
+  idx_early <- which(h_target1 > h_at_switch & h_target1 <= h_at_wane_actual)
+  idx_late <- which(h_target1 > h_at_wane_actual)
+  
+  if (length(idx_pre) > 0) {
+    t_event_1[idx_pre] <- scale_0[idx_pre] * (h_target1[idx_pre])^(1 / shape)
+  }
+  if (length(idx_early) > 0) {
+    term_early <- (t_switch_1[idx_early] / scale_0[idx_early])^shape + 
+                  (h_target1[idx_early] - h_at_switch[idx_early]) / hr_early
+    t_event_1[idx_early] <- scale_0[idx_early] * (term_early)^(1 / shape)
+  }
+  if (length(idx_late) > 0) {
+    term_late <- (t_wane / scale_0[idx_late])^shape + 
+                 (h_target1[idx_late] - h_at_wane_actual[idx_late]) / hr_late
+    t_event_1[idx_late] <- scale_0[idx_late] * (term_late)^(1 / shape)
+  }
+  
+  # 4. Marginal Survival Curves across follow-up
+  days <- seq_len(tau)
+  s0_vec <- numeric(tau)
+  s1_vec <- numeric(tau)
+  
+  for (d in days) {
+    s0_vec[d] <- mean(t_event_0 > d)
+    s1_vec[d] <- mean(t_event_1 > d)
+  }
+  
+  truth_df <- tibble::tibble(
+    t = days,
+    S0_true = s0_vec,
+    S1_true = s1_vec,
+    rd_true = s1_vec - s0_vec,
+    hr_true = log(pmax(s1_vec, 1e-6)) / log(pmax(s0_vec, 1e-6))
+  )
+  
+  return(truth_df)
+}
+
 #' Ground Truth Counterfactual Value Generator for Scenario 2 (Non-Linear Misspecification)
 #'
 #' @description Computes exact counterfactual survival curves and causal estimands
@@ -155,6 +246,97 @@ compute_scenario2_truth <- function(n_oracle = 100000,
   }
   
   truth_df <- tibble(
+    t = days,
+    S0_true = s0_vec,
+    S1_true = s1_vec,
+    rd_true = s1_vec - s0_vec,
+    hr_true = log(pmax(s1_vec, 1e-6)) / log(pmax(s0_vec, 1e-6))
+  )
+  
+  return(truth_df)
+}
+
+#' Ground Truth Counterfactual Value Generator for Scenario 3 (Non-Proportional Hazards & Waning)
+#'
+#' @description Computes exact counterfactual survival curves and causal estimands
+#'   under Scenario 3 structural non-proportional hazards (HR = 0.20 for t <= 15; HR = 1.00 for t > 15).
+#'
+#' @param n_oracle Sample size for oracle counterfactual population (default 100,000).
+#' @param tau Maximum follow-up horizon (default 30).
+#' @param grace_period Maximum treatment initiation delay in days (default 10).
+#' @param t_wane Time at which efficacy wanes (default 15).
+#' @param shape Weibull shape parameter (default 1.5).
+#' @param base_scale Baseline scale parameter (default 40).
+#' @param coef_w Confounder effect on baseline hazard (default 0.5).
+#' @param hr_early Early treatment hazard ratio (default 0.20).
+#' @param hr_late Late/waned treatment hazard ratio (default 1.00).
+#' @param seed Random seed for reproducibility.
+#'
+#' @return A tibble with columns t, S0_true, S1_true, rd_true, hr_true.
+#' @export
+compute_scenario3_truth <- function(n_oracle = 100000,
+                                    tau = 30,
+                                    grace_period = 10,
+                                    t_wane = 15,
+                                    shape = 1.5,
+                                    base_scale = 40,
+                                    coef_w = 0.5,
+                                    hr_early = 0.20,
+                                    hr_late = 1.00,
+                                    seed = 99999) {
+  
+  if (!is.null(seed)) set.seed(seed)
+  
+  # 1. Baseline Confounder
+  x1 <- stats::rnorm(n_oracle, mean = 0, sd = 1)
+  scale_0 <- base_scale * exp(- (coef_w * x1) / shape)
+  
+  # 2. Strategy 0: Never Treat
+  u0 <- stats::runif(n_oracle)
+  h_target0 <- -log(u0)
+  t_event_0 <- scale_0 * (h_target0)^(1 / shape)
+  
+  # 3. Strategy 1: Treat <= Grace (dynamic initiation)
+  t_switch_1 <- sample(1:grace_period, size = n_oracle, replace = TRUE)
+  u1 <- stats::runif(n_oracle)
+  h_target1 <- -log(u1)
+  
+  h_at_switch <- (t_switch_1 / scale_0)^shape
+  h_at_wane_base <- (t_wane / scale_0)^shape
+  h_at_wane_actual <- h_at_switch + hr_early * (h_at_wane_base - h_at_switch)
+  
+  # Exact piecewise inversion
+  t_event_1 <- numeric(n_oracle)
+  
+  idx_pre <- which(h_target1 <= h_at_switch)
+  idx_early <- which(h_target1 > h_at_switch & h_target1 <= h_at_wane_actual)
+  idx_late <- which(h_target1 > h_at_wane_actual)
+  
+  if (length(idx_pre) > 0) {
+    t_event_1[idx_pre] <- scale_0[idx_pre] * (h_target1[idx_pre])^(1 / shape)
+  }
+  if (length(idx_early) > 0) {
+    term_early <- (t_switch_1[idx_early] / scale_0[idx_early])^shape + 
+                  (h_target1[idx_early] - h_at_switch[idx_early]) / hr_early
+    t_event_1[idx_early] <- scale_0[idx_early] * (term_early)^(1 / shape)
+  }
+  if (length(idx_late) > 0) {
+    term_late <- (t_wane / scale_0[idx_late])^shape + 
+                 (h_target1[idx_late] - h_at_wane_actual[idx_late]) / hr_late
+    t_event_1[idx_late] <- scale_0[idx_late] * (term_late)^(1 / shape)
+  }
+  
+  # 4. Marginal Survival Curves across follow-up
+  days <- seq_len(tau)
+  s0_vec <- numeric(tau)
+  s1_vec <- numeric(tau)
+  
+  for (d in days) {
+    s0_vec[d] <- mean(t_event_0 > d)
+    s1_vec[d] <- mean(t_event_1 > d)
+  }
+  
+  truth_df <- tibble::tibble(
     t = days,
     S0_true = s0_vec,
     S1_true = s1_vec,
