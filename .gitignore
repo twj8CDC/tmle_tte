@@ -5,6 +5,11 @@
 .Rproj.user/
 *.Rproj
 
+# Python / Virtualenv
+.venv/
+__pycache__/
+*.pyc
+
 # OS files
 .DS_Store
 

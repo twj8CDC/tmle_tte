@@ -6,5 +6,5 @@
 \description{
 Implementations of standard benchmark survival estimators used for
 methodological comparisons against TTE-TMLE, including Naive Cox, Landmarking,
-and Time-Dependent Cox regression.
+Time-Dependent Cox regression (td-Cox), and Clone-Censor-Weighting Cox Proportional Hazards (ccw-cphm).
 }

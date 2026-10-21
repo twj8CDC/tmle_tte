@@ -1,7 +1,7 @@
 Package: ttetmle
 Title: Target Trial Emulation via Time-to-Event Targeted Minimum Loss-Based Estimation
 Version: 0.1.0
-Authors@R: person("Jacob", "Tiegs", email = "jacobtiegs@example.com", role = c("aut", "cre"))
+Authors@R: person("Jacob", "Tiegs", email = "tiegsjacob@gmail.com", role = c("aut", "cre"))
 Description: Implements Clone-Censor-Weighting (CCW) integrated with Survival
     Targeted Minimum Loss-Based Estimation (TMLE) for dynamic treatment regimes
     and immortal time bias resolution in observational time-to-event data.
@@ -21,8 +21,10 @@ Imports:
     stats,
     rlang,
     tibble,
-    ggplot2
+    ggplot2,
+    splines
 Suggests:
     SuperLearner,
     earth,
-    ranger
+    ranger,
+    BART

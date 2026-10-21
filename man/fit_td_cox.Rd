@@ -2,9 +2,9 @@
 % Please edit documentation in R/08_benchmarks.R
 \name{fit_td_cox}
 \alias{fit_td_cox}
-\title{Time-Dependent Cox Proportional Hazards Model}
+\title{Time-Dependent Cox Proportional Hazards Model (td-Cox)}
 \usage{
-fit_td_cox(data, covars = NULL, tau = 30)
+fit_td_cox(data, covars = NULL, tau = 30, grace_period = 10)
 }
 \arguments{
 \item{data}{Observational data frame.}
@@ -12,11 +12,13 @@ fit_td_cox(data, covars = NULL, tau = 30)
 \item{covars}{Character vector of baseline covariates.}
 
 \item{tau}{Maximum follow-up time (default 30).}
+
+\item{grace_period}{Grace period cutoff for strategy projection (default 10).}
 }
 \value{
-A fitted \code{coxph} object.
+A list containing the fitted \code{coxph} object and counterfactual survival projections.
 }
 \description{
 Fits an extended Cox model using counting process format (tstart, tstop, event)
-with a time-varying treatment covariate.
+with a time-varying treatment covariate switching at the actual observed treatment time.
 }

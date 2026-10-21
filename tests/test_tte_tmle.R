@@ -87,7 +87,7 @@ c_td <- fit_td_cox(test_data, covars = c("x1"), tau = 30)
 
 cat("Naive Cox HR:", exp(coef(c_naive)["tx_ever"]), "\n")
 cat("Landmark Cox HR:", exp(coef(c_landmark)["tx_landmark"]), "\n")
-cat("Time-Dependent Cox HR:", exp(coef(c_td)["tx_td"]), "\n")
+cat("Time-Dependent Cox HR:", c_td$hr, "\n")
 
 cat("\nALL PACKAGE MODULE CHECKS PASSED!\n")
 

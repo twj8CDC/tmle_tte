@@ -9,3 +9,8 @@
 ^.*\.tar\.gz$
 ^PROJECT_PLAN\.md$
 ^\.DS_Store$
+^\.venv$
+^tmle_ccw\.r$
+^\.vscode$
+^\.idea$
+

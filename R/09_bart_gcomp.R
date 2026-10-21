@@ -54,8 +54,16 @@ fit_bart_gcomp <- function(data,
   Y_train <- panel_bart$event_cc_day
   
   # 2. Counterfactual test grids
+  # Dynamic protocol: Non-compliers sample initiation time from observed compliers
+  complier_times <- clones %>%
+    dplyr::filter(arm == "treat_tx" & tx_ever == 1L & t_switch <= grace_period) %>%
+    dplyr::pull(t_switch)
+  if (length(complier_times) == 0) complier_times <- grace_period
+
+  if (!is.null(seed)) set.seed(seed)
   cf_base <- data %>% 
     dplyr::select(id, dplyr::all_of(covars), tx_ever, t_switch) %>%
+    dplyr::mutate(sampled_t = sample(complier_times, dplyr::n(), replace = TRUE)) %>%
     tidyr::uncount(weights = tau, .id = "t")
   
   # Arm 0: Never treated (is_treated = 0 for all time)
@@ -64,10 +72,10 @@ fit_bart_gcomp <- function(data,
     dplyr::select(t, dplyr::all_of(covars), is_treated) %>% 
     as.matrix()
   
-  # Arm 1: Compliers retain observed t_switch; non-compliers initiate at grace_period + 1
+  # Arm 1: Compliers retain observed t_switch; non-compliers initiate at sampled_t
   cf_treat <- cf_base %>%
     dplyr::mutate(
-      t_sw = dplyr::if_else(tx_ever == 1L & t_switch <= grace_period, t_switch, grace_period + 1),
+      t_sw = dplyr::if_else(tx_ever == 1L & t_switch <= grace_period, t_switch, sampled_t),
       is_treated = dplyr::if_else(t >= t_sw, 1L, 0L)
     ) %>%
     dplyr::select(t, dplyr::all_of(covars), is_treated) %>% 
@@ -217,8 +225,16 @@ fit_bart_tmle <- function(data,
   Y_train <- panel_w$event_cc_day
   
   # 3. Counterfactual test grids across all patients for 1:tau
+  # Dynamic protocol: Non-compliers sample initiation time from observed compliers
+  complier_times <- clones %>%
+    dplyr::filter(arm == "treat_tx" & tx_ever == 1L & t_switch <= grace_period) %>%
+    dplyr::pull(t_switch)
+  if (length(complier_times) == 0) complier_times <- grace_period
+
+  if (!is.null(seed)) set.seed(seed)
   cf_base <- data %>%
     dplyr::select(id, dplyr::all_of(covars), tx_ever, t_switch) %>%
+    dplyr::mutate(sampled_t = sample(complier_times, dplyr::n(), replace = TRUE)) %>%
     tidyr::uncount(weights = tau, .id = "t")
   
   # Arm 0: Never treated
@@ -227,10 +243,10 @@ fit_bart_tmle <- function(data,
     dplyr::select(t, dplyr::all_of(covars), is_treated) %>%
     as.matrix()
   
-  # Arm 1: Compliers retain observed t_switch; non-compliers initiate at grace_period + 1
+  # Arm 1: Compliers retain observed t_switch; non-compliers initiate at sampled_t
   cf_treat <- cf_base %>%
     dplyr::mutate(
-      t_sw = dplyr::if_else(tx_ever == 1L & t_switch <= grace_period, t_switch, grace_period + 1),
+      t_sw = dplyr::if_else(tx_ever == 1L & t_switch <= grace_period, t_switch, sampled_t),
       is_treated = dplyr::if_else(t >= t_sw, 1L, 0L)
     ) %>%
     dplyr::select(t, dplyr::all_of(covars), is_treated) %>%
