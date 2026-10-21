@@ -176,6 +176,10 @@ run_simulation_condition <- function(scenario_num = 1,
     list(unif = unif_cov, prop = prop_cov, width = mean_w)
   }
 
+  eval_hr_cov <- function(hr_l, hr_u, hr_true) {
+    as.integer(!is.na(hr_l) & !is.na(hr_u) & hr_l <= hr_true & hr_true <= hr_u)
+  }
+
   results_list <- list()
 
   # -------------------------------------------------------------
@@ -186,12 +190,16 @@ run_simulation_condition <- function(scenario_num = 1,
   t_naive <- as.numeric(proc.time()["elapsed"] - t0)
   
   hr_naive <- exp(coef(fit_naive)["tx_ever"])
+  ci_hr_naive <- exp(suppressWarnings(stats::confint(fit_naive))["tx_ever", ])
+  
   # Approximate RD via baseline exponential survival
   sf_naive <- survival::survfit(fit_naive, newdata = data.frame(tx_ever = c(0, 1), x1 = 0, w1 = 3, w2 = 0, w_prog = 0, x2 = 0))
   s_naive_tau <- summary(sf_naive, times = c(15, tau), extend = TRUE)
-  rd15_naive <- s_naive_tau$surv[2] - s_naive_tau$surv[1]
-  rd30_naive <- s_naive_tau$surv[4] - s_naive_tau$surv[3]
-  se30_naive <- sqrt(s_naive_tau$std.err[4]^2 + s_naive_tau$std.err[3]^2)
+  surv_mat_naive <- s_naive_tau$surv
+  se_mat_naive <- s_naive_tau$std.err
+  rd15_naive <- as.numeric(surv_mat_naive[1, 2] - surv_mat_naive[1, 1])
+  rd30_naive <- as.numeric(surv_mat_naive[2, 2] - surv_mat_naive[2, 1])
+  se30_naive <- as.numeric(sqrt(se_mat_naive[2, 2]^2 + se_mat_naive[2, 1]^2))
   z_naive <- rd30_naive / pmax(se30_naive, 1e-4)
   p_naive <- 2 * (1 - pnorm(abs(z_naive)))
   
@@ -205,6 +213,8 @@ run_simulation_condition <- function(scenario_num = 1,
     band_lower_30 = NA_real_, band_upper_30 = NA_real_,
     rmstd_est = rd30_naive * 30 / 2, rmstd_true = rmstd_true_30, rmstd_bias = (rd30_naive * 15) - rmstd_true_30,
     hr_marginal_est = hr_naive, hr_marginal_true = hr_marg_true_30, hr_marginal_bias = hr_naive - hr_marg_true_30,
+    hr_ci_lower_30 = ci_hr_naive[1], hr_ci_upper_30 = ci_hr_naive[2],
+    hr_covered_30 = eval_hr_cov(ci_hr_naive[1], ci_hr_naive[2], hr_marg_true_30),
     z_stat_30 = z_naive, p_val_30 = p_naive, reject_H0 = as.integer(p_naive < 0.05),
     uniform_band_covered = NA_integer_, prop_time_points_covered = NA_real_, mean_band_width = NA_real_
   )
@@ -218,11 +228,15 @@ run_simulation_condition <- function(scenario_num = 1,
   
   coef_lm <- coef(fit_lm)
   hr_lm <- if ("tx_landmark" %in% names(coef_lm)) exp(coef_lm["tx_landmark"]) else 1.0
+  ci_hr_lm <- if ("tx_landmark" %in% names(coef_lm)) exp(suppressWarnings(stats::confint(fit_lm))["tx_landmark", ]) else c(NA_real_, NA_real_)
+  
   sf_lm <- survival::survfit(fit_lm, newdata = data.frame(tx_landmark = c(0, 1), x1 = 0, w1 = 3, w2 = 0, w_prog = 0, x2 = 0))
   s_lm_tau <- summary(sf_lm, times = c(15 - grace_period, tau - grace_period), extend = TRUE)
-  rd15_lm <- if (length(s_lm_tau$surv) >= 2) s_lm_tau$surv[2] - s_lm_tau$surv[1] else 0
-  rd30_lm <- if (length(s_lm_tau$surv) >= 4) s_lm_tau$surv[4] - s_lm_tau$surv[3] else s_lm_tau$surv[2] - s_lm_tau$surv[1]
-  se30_lm <- if (length(s_lm_tau$std.err) >= 4) sqrt(s_lm_tau$std.err[4]^2 + s_lm_tau$std.err[3]^2) else 0.05
+  surv_mat_lm <- s_lm_tau$surv
+  se_mat_lm <- s_lm_tau$std.err
+  rd15_lm <- if (is.matrix(surv_mat_lm) && nrow(surv_mat_lm) >= 1) as.numeric(surv_mat_lm[1, 2] - surv_mat_lm[1, 1]) else 0
+  rd30_lm <- if (is.matrix(surv_mat_lm) && nrow(surv_mat_lm) >= 2) as.numeric(surv_mat_lm[2, 2] - surv_mat_lm[2, 1]) else 0
+  se30_lm <- if (is.matrix(se_mat_lm) && nrow(se_mat_lm) >= 2) as.numeric(sqrt(se_mat_lm[2, 2]^2 + se_mat_lm[2, 1]^2)) else 0.05
   z_lm <- rd30_lm / pmax(se30_lm, 1e-4)
   p_lm <- 2 * (1 - pnorm(abs(z_lm)))
 
@@ -236,6 +250,8 @@ run_simulation_condition <- function(scenario_num = 1,
     band_lower_30 = NA_real_, band_upper_30 = NA_real_,
     rmstd_est = rd30_lm * (tau - grace_period), rmstd_true = rmstd_true_30, rmstd_bias = (rd30_lm * 20) - rmstd_true_30,
     hr_marginal_est = hr_lm, hr_marginal_true = hr_marg_true_30, hr_marginal_bias = hr_lm - hr_marg_true_30,
+    hr_ci_lower_30 = ci_hr_lm[1], hr_ci_upper_30 = ci_hr_lm[2],
+    hr_covered_30 = eval_hr_cov(ci_hr_lm[1], ci_hr_lm[2], hr_marg_true_30),
     z_stat_30 = z_lm, p_val_30 = p_lm, reject_H0 = as.integer(p_lm < 0.05),
     uniform_band_covered = NA_integer_, prop_time_points_covered = NA_real_, mean_band_width = NA_real_
   )
@@ -263,6 +279,8 @@ run_simulation_condition <- function(scenario_num = 1,
     band_lower_30 = NA_real_, band_upper_30 = NA_real_,
     rmstd_est = sum(fit_td$rd[1:tau], na.rm = TRUE), rmstd_true = rmstd_true_30, rmstd_bias = sum(fit_td$rd[1:tau], na.rm = TRUE) - rmstd_true_30,
     hr_marginal_est = fit_td$hr, hr_marginal_true = hr_marg_true_30, hr_marginal_bias = fit_td$hr - hr_marg_true_30,
+    hr_ci_lower_30 = fit_td$hr_ci[1], hr_ci_upper_30 = fit_td$hr_ci[2],
+    hr_covered_30 = eval_hr_cov(fit_td$hr_ci[1], fit_td$hr_ci[2], hr_marg_true_30),
     z_stat_30 = z_td, p_val_30 = p_td, reject_H0 = as.integer(p_td < 0.05),
     uniform_band_covered = NA_integer_, prop_time_points_covered = NA_real_, mean_band_width = NA_real_
   )
@@ -300,6 +318,8 @@ run_simulation_condition <- function(scenario_num = 1,
     band_lower_30 = NA_real_, band_upper_30 = NA_real_,
     rmstd_est = rd30_cphm * 16, rmstd_true = rmstd_true_30, rmstd_bias = (rd30_cphm * 16) - rmstd_true_30,
     hr_marginal_est = fit_cphm$hr, hr_marginal_true = hr_marg_true_30, hr_marginal_bias = fit_cphm$hr - hr_marg_true_30,
+    hr_ci_lower_30 = fit_cphm$hr_ci[1], hr_ci_upper_30 = fit_cphm$hr_ci[2],
+    hr_covered_30 = eval_hr_cov(fit_cphm$hr_ci[1], fit_cphm$hr_ci[2], hr_marg_true_30),
     z_stat_30 = z_cphm, p_val_30 = p_cphm, reject_H0 = as.integer(p_cphm < 0.05),
     uniform_band_covered = NA_integer_, prop_time_points_covered = NA_real_, mean_band_width = NA_real_
   )
@@ -329,6 +349,8 @@ run_simulation_condition <- function(scenario_num = 1,
     band_lower_30 = res_km$rd_band_lower[tau], band_upper_30 = res_km$rd_band_upper[tau],
     rmstd_est = fit_km$rmstd_tau, rmstd_true = rmstd_true_30, rmstd_bias = fit_km$rmstd_tau - rmstd_true_30,
     hr_marginal_est = fit_km$hr_marginal_tau, hr_marginal_true = hr_marg_true_30, hr_marginal_bias = fit_km$hr_marginal_tau - hr_marg_true_30,
+    hr_ci_lower_30 = fit_km$hr_ci_lower_tau, hr_ci_upper_30 = fit_km$hr_ci_upper_tau,
+    hr_covered_30 = eval_hr_cov(fit_km$hr_ci_lower_tau, fit_km$hr_ci_upper_tau, hr_marg_true_30),
     z_stat_30 = z_km, p_val_30 = p_km, reject_H0 = as.integer(p_km < 0.05),
     uniform_band_covered = band_cov_km$unif, prop_time_points_covered = band_cov_km$prop, mean_band_width = band_cov_km$width
   )
@@ -359,6 +381,11 @@ run_simulation_condition <- function(scenario_num = 1,
   p_bart <- 2 * (1 - pnorm(abs(z_bart)))
   band_cov_bart <- if ("band_lower" %in% names(res_bart)) eval_band_cov(res_bart$band_lower, res_bart$band_upper, truth$rd_true) else list(unif=NA_integer_, prop=NA_real_, width=NA_real_)
 
+  hr_marg_bart <- log(pmax(pmin(res_bart$treat_tx[tau], 1 - 1e-6), 1e-6)) / log(pmax(pmin(res_bart$control_no_tx[tau], 1 - 1e-6), 1e-6))
+  se_log_hr_bart <- se30_bart / (abs(res_bart$rd[tau]) + 0.05)
+  hr_ci_l_bart <- exp(log(pmax(hr_marg_bart, 1e-6)) - 1.96 * se_log_hr_bart)
+  hr_ci_u_bart <- exp(log(pmax(hr_marg_bart, 1e-6)) + 1.96 * se_log_hr_bart)
+
   results_list[[6]] <- tibble(
     estimator = "G-COMP (BART)",
     elapsed_sec = t_bart,
@@ -371,9 +398,11 @@ run_simulation_condition <- function(scenario_num = 1,
     band_lower_30 = if ("band_lower" %in% names(res_bart)) res_bart$band_lower[tau] else NA_real_, 
     band_upper_30 = if ("band_upper" %in% names(res_bart)) res_bart$band_upper[tau] else NA_real_,
     rmstd_est = sum(res_bart$rd[1:tau], na.rm = TRUE), rmstd_true = rmstd_true_30, rmstd_bias = sum(res_bart$rd[1:tau], na.rm = TRUE) - rmstd_true_30,
-    hr_marginal_est = log(pmax(pmin(res_bart$treat_tx[tau], 1 - 1e-6), 1e-6)) / log(pmax(pmin(res_bart$control_no_tx[tau], 1 - 1e-6), 1e-6)),
+    hr_marginal_est = hr_marg_bart,
     hr_marginal_true = hr_marg_true_30,
-    hr_marginal_bias = (log(pmax(pmin(res_bart$treat_tx[tau], 1 - 1e-6), 1e-6)) / log(pmax(pmin(res_bart$control_no_tx[tau], 1 - 1e-6), 1e-6))) - hr_marg_true_30,
+    hr_marginal_bias = hr_marg_bart - hr_marg_true_30,
+    hr_ci_lower_30 = hr_ci_l_bart, hr_ci_upper_30 = hr_ci_u_bart,
+    hr_covered_30 = eval_hr_cov(hr_ci_l_bart, hr_ci_u_bart, hr_marg_true_30),
     z_stat_30 = z_bart, p_val_30 = p_bart, reject_H0 = as.integer(p_bart < 0.05),
     uniform_band_covered = band_cov_bart$unif, prop_time_points_covered = band_cov_bart$prop, mean_band_width = band_cov_bart$width
   )
@@ -415,6 +444,8 @@ run_simulation_condition <- function(scenario_num = 1,
     band_lower_30 = res_tbart$rd_band_lower[tau], band_upper_30 = res_tbart$rd_band_upper[tau],
     rmstd_est = sum(res_tbart$rd[1:tau], na.rm = TRUE), rmstd_true = rmstd_true_30, rmstd_bias = sum(res_tbart$rd[1:tau], na.rm = TRUE) - rmstd_true_30,
     hr_marginal_est = res_tbart$hr_cum[tau], hr_marginal_true = hr_marg_true_30, hr_marginal_bias = res_tbart$hr_cum[tau] - hr_marg_true_30,
+    hr_ci_lower_30 = res_tbart$hr_ci_lower[tau], hr_ci_upper_30 = res_tbart$hr_ci_upper[tau],
+    hr_covered_30 = eval_hr_cov(res_tbart$hr_ci_lower[tau], res_tbart$hr_ci_upper[tau], hr_marg_true_30),
     z_stat_30 = z_tbart, p_val_30 = p_tbart, reject_H0 = as.integer(p_tbart < 0.05),
     uniform_band_covered = band_cov_tbart$unif, prop_time_points_covered = band_cov_tbart$prop, mean_band_width = band_cov_tbart$width
   )
@@ -454,6 +485,8 @@ run_simulation_condition <- function(scenario_num = 1,
     band_lower_30 = res_glm$rd_band_lower[tau], band_upper_30 = res_glm$rd_band_upper[tau],
     rmstd_est = sum(res_glm$rd[1:tau], na.rm = TRUE), rmstd_true = rmstd_true_30, rmstd_bias = sum(res_glm$rd[1:tau], na.rm = TRUE) - rmstd_true_30,
     hr_marginal_est = res_glm$hr_cum[tau], hr_marginal_true = hr_marg_true_30, hr_marginal_bias = res_glm$hr_cum[tau] - hr_marg_true_30,
+    hr_ci_lower_30 = res_glm$hr_ci_lower[tau], hr_ci_upper_30 = res_glm$hr_ci_upper[tau],
+    hr_covered_30 = eval_hr_cov(res_glm$hr_ci_lower[tau], res_glm$hr_ci_upper[tau], hr_marg_true_30),
     z_stat_30 = z_glm, p_val_30 = p_glm, reject_H0 = as.integer(p_glm < 0.05),
     uniform_band_covered = band_cov_glm$unif, prop_time_points_covered = band_cov_glm$prop, mean_band_width = band_cov_glm$width
   )
@@ -492,6 +525,8 @@ run_simulation_condition <- function(scenario_num = 1,
     band_lower_30 = res_sl$rd_band_lower[tau], band_upper_30 = res_sl$rd_band_upper[tau],
     rmstd_est = sum(res_sl$rd[1:tau], na.rm = TRUE), rmstd_true = rmstd_true_30, rmstd_bias = sum(res_sl$rd[1:tau], na.rm = TRUE) - rmstd_true_30,
     hr_marginal_est = res_sl$hr_cum[tau], hr_marginal_true = hr_marg_true_30, hr_marginal_bias = res_sl$hr_cum[tau] - hr_marg_true_30,
+    hr_ci_lower_30 = res_sl$hr_ci_lower[tau], hr_ci_upper_30 = res_sl$hr_ci_upper[tau],
+    hr_covered_30 = eval_hr_cov(res_sl$hr_ci_lower[tau], res_sl$hr_ci_upper[tau], hr_marg_true_30),
     z_stat_30 = z_sl, p_val_30 = p_sl, reject_H0 = as.integer(p_sl < 0.05),
     uniform_band_covered = band_cov_sl$unif, prop_time_points_covered = band_cov_sl$prop, mean_band_width = band_cov_sl$width
   )

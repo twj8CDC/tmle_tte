@@ -245,12 +245,16 @@ fit_ccw_km <- function(panel_w,
   res <- inf$results
   rmstd <- sum(res$rd[1:tau], na.rm = TRUE)
   hr_marg <- res$hr_marginal[tau]
+  hr_ci_l <- res$hr_ci_lower[tau]
+  hr_ci_u <- res$hr_ci_upper[tau]
   
   return(list(
     results = res,
     crit_val_simul = inf$crit_val_simul,
     rmstd_tau = rmstd,
     hr_marginal_tau = hr_marg,
+    hr_ci_lower_tau = hr_ci_l,
+    hr_ci_upper_tau = hr_ci_u,
     elapsed_sec = t_elapsed
   ))
 }

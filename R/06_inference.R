@@ -323,14 +323,41 @@ compute_ccw_km_inference <- function(panel_w,
     tidyr::pivot_wider(names_from = arm, values_from = surv) %>%
     dplyr::mutate(rd = treat_tx - control_no_tx)
   
+  # Functional Delta Method for Cumulative Hazard Ratio off KM Influence Curves:
+  # IC_log_hr = IC_1 / (S1 * log(S1)) - IC_0 / (S0 * log(S0))
+  surv_wide_for_hr <- surv_wide %>%
+    dplyr::select(t, S_ctrl = control_no_tx, S_treat = treat_tx)
+  
+  ic_hr_km <- ic_long %>%
+    dplyr::left_join(surv_wide_for_hr, by = "t") %>%
+    dplyr::mutate(
+      denom_treat = S_treat * log(pmax(pmin(S_treat, 1 - 1e-6), 1e-6)),
+      denom_ctrl  = S_ctrl  * log(pmax(pmin(S_ctrl,  1 - 1e-6), 1e-6)),
+      IC_log_hr = dplyr::case_when(
+        abs(denom_treat) < 1e-4 | abs(denom_ctrl) < 1e-4 ~ 0,
+        TRUE ~ (treat_tx / denom_treat) - (control_no_tx / denom_ctrl)
+      )
+    )
+  
+  hr_summary_km <- ic_hr_km %>%
+    dplyr::group_by(t) %>%
+    dplyr::summarise(
+      var_IC_log_hr = stats::var(IC_log_hr) / n_patients,
+      se_log_hr = sqrt(var_IC_log_hr),
+      .groups = "drop"
+    )
+
   results <- surv_wide %>%
     dplyr::left_join(km_summary, by = "t") %>%
+    dplyr::left_join(hr_summary_km, by = "t") %>%
     dplyr::mutate(
       rd_ci_lower = rd - crit_val_pointwise * se_RD,
       rd_ci_upper = rd + crit_val_pointwise * se_RD,
       rd_band_lower = rd - crit_val_simul * se_RD,
       rd_band_upper = rd + crit_val_simul * se_RD,
-      hr_marginal = log(pmax(pmin(treat_tx, 1 - 1e-6), 1e-6)) / log(pmax(pmin(control_no_tx, 1 - 1e-6), 1e-6))
+      hr_marginal = log(pmax(pmin(treat_tx, 1 - 1e-6), 1e-6)) / log(pmax(pmin(control_no_tx, 1 - 1e-6), 1e-6)),
+      hr_ci_lower = exp(log(pmax(hr_marginal, 1e-6)) - crit_val_pointwise * se_log_hr),
+      hr_ci_upper = exp(log(pmax(hr_marginal, 1e-6)) + crit_val_pointwise * se_log_hr)
     )
   
   return(list(
@@ -338,6 +365,7 @@ compute_ccw_km_inference <- function(panel_w,
     crit_val_simul = crit_val_simul,
     crit_val_pointwise = crit_val_pointwise,
     ic_matrix = ic_mat,
-    se_RD = km_summary$se_RD
+    se_RD = km_summary$se_RD,
+    se_log_hr = hr_summary_km$se_log_hr
   ))
 }

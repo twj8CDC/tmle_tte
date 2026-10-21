@@ -79,10 +79,11 @@ def export_xlsx(csv_path="sim/simulation_results_1iter.csv", xlsx_path="sim/simu
 
     exec_headers = [
         "Scenario", "Specification Regime", "Estimator", "Runtime (sec)",
+        "RD(15) Est", "RD(15) True", "Bias(15)",
         "RD(30) Est", "RD(30) True", "Bias(30)", "Rel Bias (%)",
         "SE(30)", "95% Pointwise CI", "95% Simultaneous Band",
         "Delta RMSTD(30)", "RMSTD True", "RMSTD Bias",
-        "Marginal HR(30)", "HR True", "HR Bias",
+        "Marginal HR(30)", "HR True", "HR Bias", "95% CI HR", "HR Covered (0/1)",
         "Z-stat", "p-value", "Reject H0",
         "Uniform Band Cov", "Pointwise Band Cov %", "Mean Band Width"
     ]
@@ -106,6 +107,10 @@ def export_xlsx(csv_path="sim/simulation_results_1iter.csv", xlsx_path="sim/simu
 
     for r in records:
         r_idx += 1
+        rd15_est = safe_float(r.get("rd_15_est"))
+        rd15_true = safe_float(r.get("rd_15_true"))
+        bias15 = safe_float(r.get("bias_15"))
+
         rd_est = safe_float(r.get("rd_30_est"))
         rd_true = safe_float(r.get("rd_30_true"))
         bias = safe_float(r.get("bias_30"))
@@ -126,6 +131,10 @@ def export_xlsx(csv_path="sim/simulation_results_1iter.csv", xlsx_path="sim/simu
         hr_est = safe_float(r.get("hr_marginal_est"))
         hr_true = safe_float(r.get("hr_marginal_true"))
         hr_bias = safe_float(r.get("hr_marginal_bias"))
+        hr_l = safe_float(r.get("hr_ci_lower_30"))
+        hr_u = safe_float(r.get("hr_ci_upper_30"))
+        hr_ci_str = f"[{hr_l}, {hr_u}]" if hr_l != "-" else "-"
+        hr_cov = r.get("hr_covered_30", "-")
 
         z_val = safe_float(r.get("z_stat_30"), 2)
         p_val = safe_float(r.get("p_val_30"), 4)
@@ -138,10 +147,11 @@ def export_xlsx(csv_path="sim/simulation_results_1iter.csv", xlsx_path="sim/simu
         row_vals = [
             r.get("scenario_id"), r.get("regime_id"), r.get("estimator"),
             safe_float(r.get("elapsed_sec"), 3),
+            rd15_est, rd15_true, bias15,
             rd_est, rd_true, bias, f"{rel_bias}%" if rel_bias != "-" else "-",
             se, ci_str, band_str,
             rmstd_est, rmstd_true, rmstd_bias,
-            hr_est, hr_true, hr_bias,
+            hr_est, hr_true, hr_bias, hr_ci_str, hr_cov,
             z_val, p_val, rej,
             unif_cov, f"{prop_cov * 100}%" if prop_cov != "-" else "-", mean_w
         ]
@@ -152,7 +162,7 @@ def export_xlsx(csv_path="sim/simulation_results_1iter.csv", xlsx_path="sim/simu
             cell.border = border_thin
             if c_i in [1, 2, 3]:
                 cell.alignment = align_left
-            elif c_i in [4, 5, 6, 7, 8, 9, 12, 13, 14, 15, 16, 17, 18, 19]:
+            elif c_i in [4, 5, 6, 7, 8, 9, 10, 11, 12, 15, 16, 17, 18, 19, 20, 23, 24]:
                 cell.alignment = align_right
             else:
                 cell.alignment = align_center
@@ -162,7 +172,7 @@ def export_xlsx(csv_path="sim/simulation_results_1iter.csv", xlsx_path="sim/simu
                 cell.fill = fill_green
         ws_exec.row_dimensions[r_idx].height = 20
 
-    exec_widths = [14, 26, 26, 14, 12, 12, 12, 14, 12, 20, 20, 16, 14, 14, 16, 12, 12, 10, 10, 10, 16, 18, 16]
+    exec_widths = [14, 26, 26, 14, 12, 12, 12, 12, 12, 12, 14, 12, 20, 20, 16, 14, 14, 16, 12, 12, 18, 16, 10, 10, 10, 16, 18, 16]
     for i, w in enumerate(exec_widths, start=1):
         ws_exec.column_dimensions[get_column_letter(i)].width = w
 
@@ -235,10 +245,11 @@ def export_xlsx(csv_path="sim/simulation_results_1iter.csv", xlsx_path="sim/simu
 
         s_headers = [
             "Specification Regime", "Estimator", "Runtime (sec)",
-            "RD(15) Est", "Bias(15)", "RD(30) Est", "RD(30) True", "Bias(30)", "Rel Bias (%)",
+            "RD(15) Est", "RD(15) True", "Bias(15)",
+            "RD(30) Est", "RD(30) True", "Bias(30)", "Rel Bias (%)",
             "SE(30)", "95% Pointwise CI", "95% Simultaneous Band",
             "Delta RMSTD(30)", "RMSTD True", "RMSTD Bias",
-            "Marginal HR(30)", "HR True", "HR Bias",
+            "Marginal HR(30)", "HR True", "HR Bias", "95% CI HR", "HR Covered (0/1)",
             "Z-stat", "p-value", "Reject H0",
             "Uniform Band Cov", "Pointwise Band Cov %", "Mean Band Width"
         ]
@@ -257,6 +268,7 @@ def export_xlsx(csv_path="sim/simulation_results_1iter.csv", xlsx_path="sim/simu
         for r in s_records:
             r_idx += 1
             rd15_est = safe_float(r.get("rd_15_est"))
+            rd15_true = safe_float(r.get("rd_15_true"))
             bias15 = safe_float(r.get("bias_15"))
             rd_est = safe_float(r.get("rd_30_est"))
             rd_true = safe_float(r.get("rd_30_true"))
@@ -278,6 +290,10 @@ def export_xlsx(csv_path="sim/simulation_results_1iter.csv", xlsx_path="sim/simu
             hr_est = safe_float(r.get("hr_marginal_est"))
             hr_true = safe_float(r.get("hr_marginal_true"))
             hr_bias = safe_float(r.get("hr_marginal_bias"))
+            hr_l = safe_float(r.get("hr_ci_lower_30"))
+            hr_u = safe_float(r.get("hr_ci_upper_30"))
+            hr_ci_str = f"[{hr_l}, {hr_u}]" if hr_l != "-" else "-"
+            hr_cov = r.get("hr_covered_30", "-")
 
             z_val = safe_float(r.get("z_stat_30"), 2)
             p_val = safe_float(r.get("p_val_30"), 4)
@@ -290,10 +306,11 @@ def export_xlsx(csv_path="sim/simulation_results_1iter.csv", xlsx_path="sim/simu
             row_vals = [
                 r.get("regime_id"), r.get("estimator"),
                 safe_float(r.get("elapsed_sec"), 3),
-                rd15_est, bias15, rd_est, rd_true, bias, f"{rel_bias}%" if rel_bias != "-" else "-",
+                rd15_est, rd15_true, bias15,
+                rd_est, rd_true, bias, f"{rel_bias}%" if rel_bias != "-" else "-",
                 se, ci_str, band_str,
                 rmstd_est, rmstd_true, rmstd_bias,
-                hr_est, hr_true, hr_bias,
+                hr_est, hr_true, hr_bias, hr_ci_str, hr_cov,
                 z_val, p_val, rej,
                 unif_cov, f"{prop_cov * 100}%" if prop_cov != "-" else "-", mean_w
             ]
@@ -304,7 +321,7 @@ def export_xlsx(csv_path="sim/simulation_results_1iter.csv", xlsx_path="sim/simu
                 cell.border = border_thin
                 if c_i in [1, 2]:
                     cell.alignment = align_left
-                elif c_i in [3, 4, 5, 6, 7, 8, 9, 10, 13, 14, 15, 16, 17, 18, 19, 20]:
+                elif c_i in [3, 4, 5, 6, 7, 8, 9, 10, 11, 14, 15, 16, 17, 18, 19, 22, 23]:
                     cell.alignment = align_right
                 else:
                     cell.alignment = align_center
@@ -314,7 +331,7 @@ def export_xlsx(csv_path="sim/simulation_results_1iter.csv", xlsx_path="sim/simu
 
             ws_s.row_dimensions[r_idx].height = 20
 
-        s_widths = [26, 26, 14, 12, 12, 12, 12, 12, 14, 12, 20, 20, 16, 14, 14, 16, 12, 12, 10, 10, 10, 16, 18, 16]
+        s_widths = [26, 26, 14, 12, 12, 12, 12, 12, 12, 14, 12, 20, 20, 16, 14, 14, 16, 12, 12, 18, 16, 10, 10, 10, 16, 18, 16]
         for i, w in enumerate(s_widths, start=1):
             ws_s.column_dimensions[get_column_letter(i)].width = w
 
