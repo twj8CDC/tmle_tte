@@ -63,6 +63,7 @@ evaluate_ademp_metrics <- function(sim_results,
       dplyr::summarise(
         has_band = any(!is.na(band_lower)),
         all_covered = if (any(!is.na(band_lower))) all(truth >= band_lower & truth <= band_upper, na.rm = TRUE) else NA,
+        prop_time_covered = if (any(!is.na(band_lower))) mean(truth >= band_lower & truth <= band_upper, na.rm = TRUE) else NA_real_,
         mean_band_w = if (any(!is.na(band_lower))) mean(band_upper - band_lower, na.rm = TRUE) else NA_real_,
         .groups = "drop"
       )
@@ -71,6 +72,7 @@ evaluate_ademp_metrics <- function(sim_results,
       dplyr::group_by(method) %>%
       dplyr::summarise(
         band_coverage_95 = if (all(is.na(all_covered))) NA_real_ else mean(all_covered, na.rm = TRUE),
+        band_time_coverage = if (all(is.na(prop_time_covered))) NA_real_ else mean(prop_time_covered, na.rm = TRUE),
         band_width = if (all(is.na(mean_band_w))) NA_real_ else mean(mean_band_w, na.rm = TRUE),
         .groups = "drop"
       )

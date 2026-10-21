@@ -92,24 +92,24 @@ Notice how the causal Risk Difference expands rapidly while the drug is active (
 ```{r plot-truth}
 #| fig-width: 8
 #| fig-height: 4.5
-#| code-summary: "Plot true counterfactual survival trajectories and risk difference"
+#| code-summary: "Plot true counterfactual survival trajectories and risk difference using step functions"
 par(mfrow = c(1, 2))
 
-# 1. Marginal Survival Curves
-plot(truth$t, truth$S1_true, type = "l", col = "blue", lwd = 2.5,
+# 1. Marginal Survival Curves (Discrete Step Functions)
+plot(truth$t, truth$S1_true, type = "s", col = "blue", lwd = 2.5,
      ylim = c(0.4, 1.0), xlab = "Time (Days)", ylab = "Survival Probability",
-     main = "True Marginal Survival Curves")
-lines(truth$t, truth$S0_true, col = "red", lwd = 2.5, lty = 2)
+     main = "True Marginal Survival Curves (Steps)")
+lines(truth$t, truth$S0_true, type = "s", col = "red", lwd = 2.5, lty = 2)
 abline(v = 15, lty = 3, col = "gray40", lwd = 1.5)
 text(15, 0.45, "Efficacy Waning (Day 15)", pos = 4, cex = 0.8)
 legend("bottomleft", legend = c("Treated Regime (S1)", "Control Regime (S0)"),
        col = c("blue", "red"), lty = c(1, 2), lwd = 2)
 grid()
 
-# 2. Risk Difference Trajectory
-plot(truth$t, truth$rd_true, type = "l", col = "purple", lwd = 2.5,
+# 2. Risk Difference Trajectory (Discrete Step Function)
+plot(truth$t, truth$rd_true, type = "s", col = "purple", lwd = 2.5,
      ylim = c(0, 0.16), xlab = "Time (Days)", ylab = "Risk Difference (S1 - S0)",
-     main = "Causal Risk Difference Over Time")
+     main = "Causal Risk Difference Over Time (Steps)")
 abline(v = 15, lty = 3, col = "gray40", lwd = 1.5)
 points(15, truth_rd_15, pch = 19, col = "darkgreen", cex = 1.5)
 points(30, truth_rd_30, pch = 19, col = "darkgreen", cex = 1.5)
@@ -361,24 +361,38 @@ To compare how each method quantifies uncertainty across the entire 30-day timel
 ```{r plot-multi-bands}
 #| fig-width: 10
 #| fig-height: 8.5
-#| code-summary: "Plot 4-panel comparative uncertainty envelopes across all estimators"
+#| code-summary: "Plot 4-panel comparative uncertainty envelopes using discrete step functions"
 # Prepare CCW-KM bounds
 ccw_res <- fit_glm$res_log
 crit_simul_tmle <- fit_sl$crit_val_simul
 crit_simul_bart <- bart_res$crit_val_simul
 
+ccw_ci_lower <- ccw_res$rd - 1.96 * ccw_res$rd_se
+ccw_ci_upper <- ccw_res$rd + 1.96 * ccw_res$rd_se
+ccw_band_lower <- ccw_res$rd - crit_simul_tmle * ccw_res$rd_se
+ccw_band_upper <- ccw_res$rd + crit_simul_tmle * ccw_res$rd_se
+
 par(mfrow = c(2, 2), mar = c(4, 4, 3, 1))
 
+# Helper for step ribbons
+draw_step_ribbon <- function(t, lower, upper, col) {
+  t_s <- rep(t, each = 2)[-1]
+  t_s <- c(t[1], t_s)
+  l_s <- rep(lower, each = 2)[-length(rep(lower, each = 2))]
+  l_s <- c(lower[1], l_s)
+  u_s <- rep(upper, each = 2)[-length(rep(upper, each = 2))]
+  u_s <- c(upper[1], u_s)
+  polygon(c(t_s, rev(t_s)), c(l_s, rev(u_s)), col = col, border = NA)
+}
+
 # Panel 1: TTE-TMLE (SuperLearner)
-plot(truth$t, fit_sl$res_tmle$rd, type = "l", lwd = 2, col = "purple",
+plot(truth$t, fit_sl$res_tmle$rd, type = "s", lwd = 2.2, col = "purple",
      ylim = c(-0.04, 0.22), xlab = "Time (Days)", ylab = "Risk Difference",
      main = paste0("A. TTE-TMLE (Crit Simul = ", round(crit_simul_tmle, 2), ")"))
-polygon(c(truth$t, rev(truth$t)), 
-        c(fit_sl$res_tmle$rd_band_lower, rev(fit_sl$res_tmle$rd_band_upper)),
-        col = rgb(0.5, 0, 0.5, 0.15), border = NA)
-lines(truth$t, fit_sl$res_tmle$rd_ci_lower, lty = 2, col = "purple", lwd = 1.2)
-lines(truth$t, fit_sl$res_tmle$rd_ci_upper, lty = 2, col = "purple", lwd = 1.2)
-lines(truth$t, truth$rd_true, col = "red", lty = 1, lwd = 1.8)
+draw_step_ribbon(truth$t, fit_sl$res_tmle$rd_band_lower, fit_sl$res_tmle$rd_band_upper, rgb(0.5, 0, 0.5, 0.15))
+lines(truth$t, fit_sl$res_tmle$rd_ci_lower, type = "s", lty = 2, col = "purple", lwd = 1.2)
+lines(truth$t, fit_sl$res_tmle$rd_ci_upper, type = "s", lty = 2, col = "purple", lwd = 1.2)
+lines(truth$t, truth$rd_true, type = "s", col = "red", lty = 1, lwd = 1.8)
 abline(v = 15, lty = 3, col = "gray50")
 legend("topleft", legend = c("Estimate", "Pointwise 95% CI", "95% Simultaneous Band", "True Oracle"),
        col = c("purple", "purple", rgb(0.5, 0, 0.5, 0.5), "red"),
@@ -386,15 +400,13 @@ legend("topleft", legend = c("Estimate", "Pointwise 95% CI", "95% Simultaneous B
 grid()
 
 # Panel 2: Survival-BART (Posterior Draws)
-plot(truth$t, bart_res$results$rd, type = "l", lwd = 2, col = "darkgreen",
+plot(truth$t, bart_res$results$rd, type = "s", lwd = 2.2, col = "darkgreen",
      ylim = c(-0.04, 0.22), xlab = "Time (Days)", ylab = "Risk Difference",
      main = paste0("B. Survival-BART (Crit Simul = ", round(crit_simul_bart, 2), ")"))
-polygon(c(truth$t, rev(truth$t)), 
-        c(bart_res$results$band_lower, rev(bart_res$results$band_upper)),
-        col = rgb(0, 0.5, 0, 0.15), border = NA)
-lines(truth$t, bart_res$results$cri_lower, lty = 2, col = "darkgreen", lwd = 1.2)
-lines(truth$t, bart_res$results$cri_upper, lty = 2, col = "darkgreen", lwd = 1.2)
-lines(truth$t, truth$rd_true, col = "red", lty = 1, lwd = 1.8)
+draw_step_ribbon(truth$t, bart_res$results$band_lower, bart_res$results$band_upper, rgb(0, 0.5, 0, 0.15))
+lines(truth$t, bart_res$results$cri_lower, type = "s", lty = 2, col = "darkgreen", lwd = 1.2)
+lines(truth$t, bart_res$results$cri_upper, type = "s", lty = 2, col = "darkgreen", lwd = 1.2)
+lines(truth$t, truth$rd_true, type = "s", col = "red", lty = 1, lwd = 1.8)
 abline(v = 15, lty = 3, col = "gray50")
 legend("topleft", legend = c("Posterior Mean", "Pointwise 95% CrI", "95% Simultaneous Band", "True Oracle"),
        col = c("darkgreen", "darkgreen", rgb(0, 0.5, 0, 0.5), "red"),
@@ -402,20 +414,13 @@ legend("topleft", legend = c("Posterior Mean", "Pointwise 95% CrI", "95% Simulta
 grid()
 
 # Panel 3: Parametric CCW-KM
-ccw_ci_lower <- ccw_res$rd - 1.96 * ccw_res$rd_se
-ccw_ci_upper <- ccw_res$rd + 1.96 * ccw_res$rd_se
-ccw_band_lower <- ccw_res$rd - crit_simul_tmle * ccw_res$rd_se
-ccw_band_upper <- ccw_res$rd + crit_simul_tmle * ccw_res$rd_se
-
-plot(truth$t, ccw_res$rd, type = "l", lwd = 2, col = "dodgerblue3",
+plot(truth$t, ccw_res$rd, type = "s", lwd = 2.2, col = "dodgerblue3",
      ylim = c(-0.04, 0.22), xlab = "Time (Days)", ylab = "Risk Difference",
      main = "C. Parametric CCW-KM")
-polygon(c(truth$t, rev(truth$t)), 
-        c(ccw_band_lower, rev(ccw_band_upper)),
-        col = rgb(0.12, 0.56, 1, 0.15), border = NA)
-lines(truth$t, ccw_ci_lower, lty = 2, col = "dodgerblue3", lwd = 1.2)
-lines(truth$t, ccw_ci_upper, lty = 2, col = "dodgerblue3", lwd = 1.2)
-lines(truth$t, truth$rd_true, col = "red", lty = 1, lwd = 1.8)
+draw_step_ribbon(truth$t, ccw_band_lower, ccw_band_upper, rgb(0.12, 0.56, 1, 0.15))
+lines(truth$t, ccw_ci_lower, type = "s", lty = 2, col = "dodgerblue3", lwd = 1.2)
+lines(truth$t, ccw_ci_upper, type = "s", lty = 2, col = "dodgerblue3", lwd = 1.2)
+lines(truth$t, truth$rd_true, type = "s", col = "red", lty = 1, lwd = 1.8)
 abline(v = 15, lty = 3, col = "gray50")
 legend("topleft", legend = c("Estimate", "Pointwise 95% CI", "95% Simultaneous Band", "True Oracle"),
        col = c("dodgerblue3", "dodgerblue3", rgb(0.12, 0.56, 1, 0.5), "red"),
@@ -423,12 +428,12 @@ legend("topleft", legend = c("Estimate", "Pointwise 95% CI", "95% Simultaneous B
 grid()
 
 # Panel 4: All Three Estimators Overlaid
-plot(truth$t, truth$rd_true, type = "l", lwd = 3, col = "red",
+plot(truth$t, truth$rd_true, type = "s", lwd = 3, col = "red",
      ylim = c(-0.02, 0.18), xlab = "Time (Days)", ylab = "Risk Difference",
-     main = "D. Direct Estimator Overlay vs. Ground Truth")
-lines(truth$t, fit_sl$res_tmle$rd, col = "purple", lwd = 2, lty = 1)
-lines(truth$t, bart_res$results$rd, col = "darkgreen", lwd = 2, lty = 2)
-lines(truth$t, ccw_res$rd, col = "dodgerblue3", lwd = 2, lty = 3)
+     main = "D. Direct Step Estimator Overlay vs. Ground Truth")
+lines(truth$t, fit_sl$res_tmle$rd, type = "s", col = "purple", lwd = 2, lty = 1)
+lines(truth$t, bart_res$results$rd, type = "s", col = "darkgreen", lwd = 2, lty = 2)
+lines(truth$t, ccw_res$rd, type = "s", col = "dodgerblue3", lwd = 2, lty = 3)
 abline(v = 15, lty = 3, col = "gray50")
 legend("topleft", legend = c("True Oracle", "TTE-TMLE", "Survival-BART", "CCW-KM"),
        col = c("red", "purple", "darkgreen", "dodgerblue3"),
@@ -447,7 +452,7 @@ A natural question arises: **"Does a Bayesian model like BART need a simultaneou
 - In Bayesian statistics, the MCMC sampler generates full posterior realizations of the entire function $RD^{(m)}(t)$ for $m = 1, \dots, M$.
 - **However, pointwise credible intervals only look at one slice at a time:**
   $$\text{CrI}_{\text{ptwise}}(t) = \big[ q_{0.025}(RD(t)), \; q_{0.975}(RD(t)) \big]$$
-  If you count how many posterior sample paths $RD^{(m)}(\cdot)$ stay *entirely inside* the pointwise envelope across all 30 days, the result is surprisingly low:
+  When we test the proportion of posterior sample paths $RD^{(m)}(\cdot)$ that stay *entirely inside* the pointwise envelope across all 30 days, the result is surprisingly low:
   $$\mathbb{P}\Big( \forall t \in [1, 30], \; RD^{(m)}(t) \in \text{CrI}_{\text{ptwise}}(t) \;\Big|\; \text{Data} \Big) \approx \mathbf{74.5\%}$$
   Even in Bayesian inference, pointwise intervals do **not** guarantee that the curve as a whole has 95% posterior probability!
 
@@ -471,13 +476,42 @@ Despite arising from completely different foundations—Gaussian process empiric
 
 ---
 
-## 7. Key Takeaways
+## 7. Methodological Insight: Why Did Standard TTE-TMLE Struggle with the Sharp Kink at Day 15?
+
+You might notice that while Survival-BART bends sharply when treatment efficacy wanes at Day 15, standard parametric TTE-TMLE rounds the bend more gradually. **Why does this happen?**
+
+### The Structural Causes:
+1. **Parametric Time in the Initial $Q_0$ Hazard Model:**
+   The default initial hazard regression uses a quadratic polynomial in time:
+   $$\text{logit}\, \lambda_0(t \mid A=1, W) = \beta_0 + \beta_1 W + \beta_2 t + \beta_3 t^2 + \beta_4 \mathbf{1}(t > 10)$$
+   A quadratic polynomial is smooth ($C^\infty$) and has no mathematical degree of freedom to create a sharp kink or slope discontinuity at Day 15.
+2. **Post-Grace Clever Covariate Pooling:**
+   In the standard TMLE targeting step, the treated arm uses two clever covariates:
+   $$H_{\text{treat,pre}} = \mathbf{1}(t \le 10) \cdot w(u), \quad H_{\text{treat,post}} = \mathbf{1}(t > 10) \cdot w(u)$$
+   Notice that $H_{\text{treat,post}}$ pools all person-time from Day 11 through Day 30 into a single clever covariate with a single scalar fluctuation parameter $\epsilon_{\text{treat,post}}$!
+   - In the acute period ($t \in [11, 15]$), the true residual is strongly protective ($\epsilon_{\text{acute}} \approx -0.60$).
+   - In the waned period ($t > 15$), the true residual is null ($\epsilon_{\text{late}} \approx 0.00$).
+   - When pooled into a single post-grace clever covariate, the fluctuation regression is forced to average these two regimes into a single blended value ($\epsilon \approx -0.15$), smoothing out the sharp inflection.
+
+### The Solution: Decoupled Clever Covariates & Spline Ensembles
+When we either:
+- **Decouple Clever Covariates:** Split $H_{\text{treat,post}}$ into an acute window $H_{\text{acute}} = \mathbf{1}(10 < t \le 15)$ and a waned window $H_{\text{waned}} = \mathbf{1}(t > 15)$, TMLE immediately estimates $\hat{\epsilon}_{\text{acute}} = -0.60$ and $\hat{\epsilon}_{\text{waned}} = +0.00$, reproducing the sharp peak ($RD(15) = 0.129$)!
+- **Nonparametric SuperLearner Ensembles:** Algorithms like `SL.earth.int` (Multivariate Adaptive Regression Splines) automatically place hinge knots $\max(0, t - 15)$, while Survival-BART splits tree nodes at $t = 15$.
+
+---
+
+## 8. Summary Conclusions
 
 1. **Should Treatment Occur Prior to Day 15?**
    - **Yes.** Initiating early ($t \le 10$) achieves an acute causal risk difference of **$12.9\%$ at Day 15** and **$7.0\%$ at Day 30**.
-   - Delaying treatment until after Day 15 forfeits the acute viral replication window, producing **zero survival gain** ($RD \approx 0\%$) over never treating.
+   - Delaying treatment until after Day 15 forfeits the acute replication window, producing **zero survival gain** ($RD \approx 0\%$) over never treating.
 2. **Failure of Constant-Hazard Models:**
    - Standard Cox models force a single time-invariant $\text{HR} \approx 0.55$, creating the dangerous illusion that the drug provides moderate protection throughout all 30 days. In reality, protection is strong early ($\text{HR} = 0.20$) and zero late ($\text{HR} = 1.00$).
+3. **Multiplier Bootstrap Simultaneous Confidence Bands:**
+   - The true continuous causal trajectory remains strictly within the 95% simultaneous confidence band across all 30 days of follow-up.
+4. **Bayesian Simultaneous Envelopes in BART:**
+   - Pointwise credible intervals only achieve $\approx 74\%$ simultaneous curve coverage. The studentized supremum simultaneous envelope restores exact 95% joint posterior path coverage, validating that both frequentist TTE-TMLE and Bayesian Survival-BART provide rigorous simultaneous trajectory inference under structural hazard shifts.
+
 3. **Multiplier Bootstrap Simultaneous Confidence Bands:**
    - The true continuous causal trajectory remains strictly within the 95% simultaneous confidence band across all 30 days of follow-up.
 4. **Bayesian Simultaneous Envelopes in BART:**

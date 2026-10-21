@@ -237,27 +237,33 @@ print.tte_tmle <- function(x, ...) {
 }
 
 #' Plot method for tte_tmle
+#' @param x An object of class \code{"tte_tmle"}.
+#' @param which Plot type: \code{"survival"}, \code{"rd"} (risk difference), or \code{"hr"} (hazard ratio).
+#' @param step Logical. If \code{TRUE} (default), renders step functions matching discrete time intervals.
+#'   If \code{FALSE}, renders continuous linear interpolation.
+#' @param ... Additional arguments passed to \code{plot} or \code{matplot}.
 #' @export
-plot.tte_tmle <- function(x, which = c("survival", "rd", "hr"), ...) {
+plot.tte_tmle <- function(x, which = c("survival", "rd", "hr"), step = TRUE, ...) {
   which <- match.arg(which)
+  plot_type <- if (step) "s" else "l"
   
   if (which == "survival") {
     matplot(x$res_tmle$t, cbind(x$res_tmle$treat_tx, x$res_tmle$control_no_tx),
-            type = "l", lty = c(1, 2), lwd = 2, col = c("blue", "red"),
+            type = plot_type, lty = c(1, 2), lwd = 2, col = c("blue", "red"),
             xlab = "Time (days)", ylab = "Marginal Survival Probability",
             main = "TTE-TMLE Marginal Survival Curves", ...)
     legend("bottomleft", legend = c("Treat Arm (Initiate <= Grace)", "Control Arm (Never Treat)"),
            col = c("blue", "red"), lty = c(1, 2), lwd = 2)
     grid()
   } else if (which == "rd") {
-    plot(x$res_tmle$t, x$res_tmle$rd, type = "l", lwd = 2, col = "purple",
+    plot(x$res_tmle$t, x$res_tmle$rd, type = plot_type, lwd = 2, col = "purple",
          ylim = range(c(x$res_tmle$rd_band_lower, x$res_tmle$rd_band_upper), na.rm = TRUE),
          xlab = "Time (days)", ylab = "Marginal Risk Difference (Treat - Control)",
          main = "TTE-TMLE Marginal Risk Difference & Simultaneous Bands", ...)
-    lines(x$res_tmle$t, x$res_tmle$rd_ci_lower, lty = 2, col = "darkgray")
-    lines(x$res_tmle$t, x$res_tmle$rd_ci_upper, lty = 2, col = "darkgray")
-    lines(x$res_tmle$t, x$res_tmle$rd_band_lower, lty = 3, col = "black", lwd = 1.5)
-    lines(x$res_tmle$t, x$res_tmle$rd_band_upper, lty = 3, col = "black", lwd = 1.5)
+    lines(x$res_tmle$t, x$res_tmle$rd_ci_lower, type = plot_type, lty = 2, col = "darkgray")
+    lines(x$res_tmle$t, x$res_tmle$rd_ci_upper, type = plot_type, lty = 2, col = "darkgray")
+    lines(x$res_tmle$t, x$res_tmle$rd_band_lower, type = plot_type, lty = 3, col = "black", lwd = 1.5)
+    lines(x$res_tmle$t, x$res_tmle$rd_band_upper, type = plot_type, lty = 3, col = "black", lwd = 1.5)
     abline(h = 0, lty = 2, col = "red")
     legend("topright", legend = c("Risk Difference", "95% Pointwise CI", "95% Simultaneous Band"),
            col = c("purple", "darkgray", "black"), lty = c(1, 2, 3), lwd = c(2, 1, 1.5))
@@ -267,14 +273,14 @@ plot.tte_tmle <- function(x, which = c("survival", "rd", "hr"), ...) {
     y_vals <- y_vals[is.finite(y_vals) & y_vals > 0]
     y_lim <- if (length(y_vals) > 0) range(pmin(pmax(y_vals, 0.05), 20)) else c(0.1, 5)
     
-    plot(x$res_tmle$t, x$res_tmle$hr_cum, type = "l", lwd = 2, col = "darkgreen", log = "y",
+    plot(x$res_tmle$t, x$res_tmle$hr_cum, type = plot_type, lwd = 2, col = "darkgreen", log = "y",
          ylim = y_lim,
          xlab = "Time (days)", ylab = "Cumulative Hazard Ratio (Log Scale)",
          main = "TTE-TMLE Cumulative Hazard Ratio & Simultaneous Bands", ...)
-    lines(x$res_tmle$t, x$res_tmle$hr_ci_lower, lty = 2, col = "darkgray")
-    lines(x$res_tmle$t, x$res_tmle$hr_ci_upper, lty = 2, col = "darkgray")
-    lines(x$res_tmle$t, x$res_tmle$hr_band_lower, lty = 3, col = "black", lwd = 1.5)
-    lines(x$res_tmle$t, x$res_tmle$hr_band_upper, lty = 3, col = "black", lwd = 1.5)
+    lines(x$res_tmle$t, x$res_tmle$hr_ci_lower, type = plot_type, lty = 2, col = "darkgray")
+    lines(x$res_tmle$t, x$res_tmle$hr_ci_upper, type = plot_type, lty = 2, col = "darkgray")
+    lines(x$res_tmle$t, x$res_tmle$hr_band_lower, type = plot_type, lty = 3, col = "black", lwd = 1.5)
+    lines(x$res_tmle$t, x$res_tmle$hr_band_upper, type = plot_type, lty = 3, col = "black", lwd = 1.5)
     abline(h = 1, lty = 2, col = "red")
     legend("topright", legend = c("Cumulative HR", "95% Pointwise CI", "95% Simultaneous Band", "Null HR = 1"),
            col = c("darkgreen", "darkgray", "black", "red"), lty = c(1, 2, 3, 2), lwd = c(2, 1, 1.5, 1))
