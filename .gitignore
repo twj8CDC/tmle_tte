@@ -11,3 +11,4 @@
 # Build artifacts
 *.tar.gz
 *.html
+~$*
