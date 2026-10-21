@@ -329,7 +329,7 @@ ci_tsl_15   <- c(tmle_sl_rd_15 - 1.96 * tmle_sl_se_15, tmle_sl_rd_15 + 1.96 * tm
 
 res_15 <- tibble(
   Estimator = c(
-    "Naive Unadjusted KM", "Landmark Analysis (Day 10)", "Parametric CCW (GLM)",
+    "Naive Unadjusted KM", "Landmark Analysis (Day 10)", "ccw-km (Weighted KM)",
     "Pure G-Computation (Survival-BART)", "TTE-TMLE (GLM)", "TTE-TMLE (BART)"
   ),
   `Estimate (RD 15)` = c(naive_rd_15, lm_rd_15, ccw_glm_rd_15, bart_rd_15, tmle_glm_rd_15, tmle_sl_rd_15),
@@ -368,7 +368,7 @@ ci_tsl_30   <- c(tmle_sl_rd_30 - 1.96 * tmle_sl_se_30, tmle_sl_rd_30 + 1.96 * tm
 
 res_30 <- tibble(
   Estimator = c(
-    "Naive Unadjusted KM", "Landmark Analysis (Day 10)", "Parametric CCW (GLM)",
+    "Naive Unadjusted KM", "Landmark Analysis (Day 10)", "ccw-km (Weighted KM)",
     "Pure G-Computation (Survival-BART)", "TTE-TMLE (GLM)", "TTE-TMLE (BART)"
   ),
   `Estimate (RD 30)` = c(naive_rd_30, lm_rd_30, ccw_glm_rd_30, bart_rd_30, tmle_glm_rd_30, tmle_sl_rd_30),

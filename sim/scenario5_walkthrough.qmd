@@ -29,7 +29,7 @@ In observational health data and Electronic Health Record (EHR) studies, treatme
 
 ### 1.2 The Methodological Target: Positivity Strain & Weight Shock
 Why does this scenario stress causal estimators?
-1. **Weight Explosion in CCW-KM:** Inverse probability of censoring weighting (CCW-KM) divides by the treatment compliance propensity $1 / P(A=1 \mid W)$. When $P(A=1 \mid W) \approx 0.01 - 0.03$, weights explode to $50 - 100+$. A single event in an extreme-weight clone creates a massive vertical cliff drop in the survival curve, inflating variance and destabilizing inference.
+1. **Weight Explosion in `ccw-km`:** Inverse probability of censoring weighting (`ccw-km`) divides by the treatment compliance propensity $1 / P(A=1 \mid W)$. When $P(A=1 \mid W) \approx 0.01 - 0.03$, weights explode to $50 - 100+$. A single event in an extreme-weight clone creates a massive vertical cliff drop in the survival curve, inflating variance, shrinking statistical power, and destabilizing inference.
 2. **Robustness of Targeted Learning (TTE-TMLE):** TTE-TMLE uses the weights only within the clever covariate targeting step $H^*(t, A, W)$, which is naturally regularized and bounded away from numerical singularities. The targeting step estimates a single scalar fluctuation parameter $\varepsilon$ across the pooled sample, damping individual weight spikes.
 3. **Pure G-Computation Stability:** Pure G-computation with Survival-BART bypasses inverse weighting altogether. By directly modeling the outcome conditional hazard $Q(t, A, W)$, BART remains completely insulated from propensity score explosion.
 
@@ -69,6 +69,7 @@ suppressPackageStartupMessages({
 # Load package modules
 invisible(lapply(list.files("../R", full.names = TRUE), source))
 source("true_values.R")
+source("evaluate_metrics.R")
 source("dgp/05_dgp_positivity_strain.R")
 
 # Compute Oracle Ground Truth
@@ -114,13 +115,15 @@ ggplot(df_prop, aes(x = prob_true, fill = strain_group)) +
 
 ## 4. Model Fitting & Results Comparison
 
-We fit six competing estimators to this high-strain cohort:
-1. **Naive Kaplan-Meier** (misclassifies immortal person-time).
-2. **Landmark Analysis (Day 10)** (discards events occurring during grace).
-3. **Parametric CCW (GLM)** (standard Clone-Censor-Weighting using $x_1$ and $x_2$; vulnerable to extreme weights).
-4. **Pure G-Computation with R-BART (`BART::mc.surv.bart`)** (completely avoids inverse propensity weights).
-5. **TTE-TMLE (GLM)** (Clone-Censor-Weighting + TMLE bounded targeting).
-6. **TTE-TMLE (SuperLearner Ensemble)** (Combines GLM, MARS splines `SL.earth.int`, and Random Forests `SL.ranger`).
+We fit the expanded benchmark estimator suite under severe positivity strain:
+1. **Naive KM:** Misclassifies immortal person-time.
+2. **Landmark Analysis (Day 10):** Discards early events.
+3. **td-Cox:** Time-dependent Cox model.
+4. **ccw-cphm:** Clone-Censor-Weighting Cox PH model.
+5. **ccw-km:** Clone-Censor-Weighting Kaplan-Meier.
+6. **Pure G-Comp (Survival-BART):** Completely avoids propensity inverse weighting.
+7. **TTE-TMLE (GLM):** Double robust targeted model.
+8. **TTE-TMLE (SuperLearner Ensemble):** Ensembling GLM, MARS splines, and Random Forests.
 
 ```{r run-models}
 #| code-summary: "Fit all benchmark models on Scenario 5 cohort"
@@ -137,7 +140,12 @@ s_lm <- summary(km_lm, times = 20)
 lm_rd_30 <- s_lm$surv[2] - s_lm$surv[1]
 lm_se_30 <- sqrt(sum(s_lm$std.err^2))
 
-# 3. Parametric CCW (GLM) & 5. TTE-TMLE (GLM)
+# 3. Time-Dependent Cox (td-Cox)
+td_res <- fit_td_cox(df, covars = c("x1", "x2"), tau = 30, grace_period = 10)
+td_rd_30 <- td_res$rd_tau
+td_se_30 <- td_res$se_rd_tau
+
+# 4. ccw-cphm & 5. ccw-km & 7. TTE-TMLE (GLM)
 fit_glm <- tte_tmle(
   df, 
   covars = c("x1", "x2"), 
@@ -145,12 +153,17 @@ fit_glm <- tte_tmle(
   tau = 30, 
   use_sl = FALSE
 )
-ccw_glm_rd_30 <- fit_glm$res_log$rd[30]
-ccw_glm_se_30 <- fit_glm$res_log$rd_se[30]
+ccw_km_rd_30 <- fit_glm$res_log$rd[30]
+ccw_km_se_30 <- fit_glm$res_log$rd_se[30]
 tmle_glm_rd_30 <- fit_glm$res_tmle$rd[30]
 tmle_glm_se_30 <- fit_glm$res_tmle$se_RD[30]
 
-# 4. Pure G-Computation with Nonparametric Survival BART
+# Fit CCW-CPHM on the weighted panel
+cphm_res <- fit_ccw_cphm(fit_glm$panel_w, covars = c("x1", "x2"), tau = 30)
+cphm_rd_30 <- cphm_res$rd_tau
+cphm_se_30 <- cphm_res$se_rd_tau
+
+# 6. Pure G-Computation with Nonparametric Survival BART
 df_std <- prepare_tte_data(df)
 clones <- create_clones(df_std, covars = c("x1", "x2"), grace_period = 10, tau = 30)
 
@@ -173,7 +186,7 @@ bart_cri_lower <- bart_res$results$cri_lower[30]
 bart_cri_upper <- bart_res$results$cri_upper[30]
 bart_width_30 <- bart_res$results$cri_width[30]
 
-# 6. TTE-TMLE with SuperLearner Ensemble (GLM + Earth + Ranger)
+# 8. TTE-TMLE with SuperLearner Ensemble (GLM + Earth + Ranger)
 set.seed(42)
 fit_sl <- tte_tmle(
   df, 
@@ -195,42 +208,58 @@ tmle_sl_se_30 <- fit_sl$res_tmle$se_RD[30]
 
 ```{r results-table}
 #| code-summary: "Construct comparative performance table under positivity strain"
-# Compute interval bounds
-naive_ci <- c(naive_rd_30 - 1.96 * naive_se_30, naive_rd_30 + 1.96 * naive_se_30)
-lm_ci <- c(lm_rd_30 - 1.96 * lm_se_30, lm_rd_30 + 1.96 * lm_se_30)
-ccw_glm_ci <- c(ccw_glm_rd_30 - 1.96 * ccw_glm_se_30, ccw_glm_rd_30 + 1.96 * ccw_glm_se_30)
-tmle_glm_ci <- c(tmle_glm_rd_30 - 1.96 * tmle_glm_se_30, tmle_glm_rd_30 + 1.96 * tmle_glm_se_30)
-tmle_sl_ci <- c(tmle_sl_rd_30 - 1.96 * tmle_sl_se_30, tmle_sl_rd_30 + 1.96 * tmle_sl_se_30)
+estimators <- c(
+  "Naive Unadjusted KM",
+  "Landmark Analysis (Day 10)",
+  "td-Cox (Grace Switch)",
+  "ccw-cphm (Weighted Cox PH)",
+  "ccw-km (Weighted KM)",
+  "Pure G-Computation (Survival-BART)",
+  "TTE-TMLE (Parametric GLM)",
+  "TTE-TMLE (SuperLearner Ensemble)"
+)
+
+estimates <- c(naive_rd_30, lm_rd_30, td_rd_30, cphm_rd_30, ccw_km_rd_30, bart_rd_30, tmle_glm_rd_30, tmle_sl_rd_30)
+ses <- c(naive_se_30, lm_se_30, td_se_30, cphm_se_30, ccw_km_se_30, bart_se_30, tmle_glm_se_30, tmle_sl_se_30)
+
+ci_lowers <- estimates - 1.96 * ses
+ci_uppers <- estimates + 1.96 * ses
+# Replace BART bounds with posterior draws
+ci_lowers[6] <- bart_cri_lower
+ci_uppers[6] <- bart_cri_upper
+
+# Hypothesis tests against H0: RD = 0
+ht_list <- lapply(seq_along(estimates), function(i) compute_hypothesis_test(estimates[i], ses[i]))
+z_stats <- sapply(ht_list, function(x) x$z_stat)
+p_vals <- sapply(ht_list, function(x) x$p_val)
+powers <- sapply(ht_list, function(x) x$power)
+fnrs <- sapply(ht_list, function(x) x$fnr)
 
 results_df <- tibble(
-  Estimator = c(
-    "Naive Unadjusted KM",
-    "Landmark Analysis (Day 10)",
-    "Parametric CCW (GLM)",
-    "Pure G-Computation (Survival-BART)",
-    "TTE-TMLE (Parametric GLM)",
-    "TTE-TMLE (SuperLearner Ensemble)"
-  ),
-  `Estimate (RD 30)` = c(naive_rd_30, lm_rd_30, ccw_glm_rd_30, bart_rd_30, tmle_glm_rd_30, tmle_sl_rd_30),
-  `True Value` = rep(truth_rd_30, 6),
+  Estimator = estimators,
+  `Estimate (RD 30)` = estimates,
+  `True Value` = rep(truth_rd_30, length(estimators)),
   `Abs Bias` = `Estimate (RD 30)` - `True Value`,
   `Rel Bias (%)` = (`Abs Bias` / `True Value`) * 100,
-  `Standard Error` = c(naive_se_30, lm_se_30, ccw_glm_se_30, bart_se_30, tmle_glm_se_30, tmle_sl_se_30),
+  `Standard Error` = ses,
   `95% Interval Width` = c(
-    as.character(round(naive_ci[2] - naive_ci[1], 4)),
-    as.character(round(lm_ci[2] - lm_ci[1], 4)),
-    as.character(round(ccw_glm_ci[2] - ccw_glm_ci[1], 4)),
+    as.character(round(ci_uppers[1:5] - ci_lowers[1:5], 4)),
     paste0(round(bart_width_30, 4), "*"),
-    as.character(round(tmle_glm_ci[2] - tmle_glm_ci[1], 4)),
-    as.character(round(tmle_sl_ci[2] - tmle_sl_ci[1], 4))
+    as.character(round(ci_uppers[7:8] - ci_lowers[7:8], 4))
   ),
+  `Z-Statistic` = z_stats,
+  `p-value` = p_vals,
+  `Power (1 - beta)` = powers,
+  `FNR (beta)` = fnrs,
   `95% Covered` = c(
-    if_else(truth_rd_30 >= naive_ci[1] & truth_rd_30 <= naive_ci[2], "Yes", "No"),
-    if_else(truth_rd_30 >= lm_ci[1] & truth_rd_30 <= lm_ci[2], "Yes", "No"),
-    if_else(truth_rd_30 >= ccw_glm_ci[1] & truth_rd_30 <= ccw_glm_ci[2], "Yes", "No"),
+    if_else(truth_rd_30 >= ci_lowers[1] & truth_rd_30 <= ci_uppers[1], "Yes", "No"),
+    if_else(truth_rd_30 >= ci_lowers[2] & truth_rd_30 <= ci_uppers[2], "Yes", "No"),
+    if_else(truth_rd_30 >= ci_lowers[3] & truth_rd_30 <= ci_uppers[3], "Yes", "No"),
+    if_else(truth_rd_30 >= ci_lowers[4] & truth_rd_30 <= ci_uppers[4], "Yes", "No"),
+    if_else(truth_rd_30 >= ci_lowers[5] & truth_rd_30 <= ci_uppers[5], "Yes", "No"),
     if_else(truth_rd_30 >= bart_cri_lower & truth_rd_30 <= bart_cri_upper, "Yes*", "No*"),
-    if_else(truth_rd_30 >= tmle_glm_ci[1] & truth_rd_30 <= tmle_glm_ci[2], "Yes", "No"),
-    if_else(truth_rd_30 >= tmle_sl_ci[1] & truth_rd_30 <= tmle_sl_ci[2], "Yes", "No")
+    if_else(truth_rd_30 >= ci_lowers[7] & truth_rd_30 <= ci_uppers[7], "Yes", "No"),
+    if_else(truth_rd_30 >= ci_lowers[8] & truth_rd_30 <= ci_uppers[8], "Yes", "No")
   )
 )
 
@@ -238,9 +267,9 @@ knitr::kable(results_df, digits = 4, caption = "Scenario 5 Performance Metrics a
 ```
 
 ### 5.2 Key Takeaways on Positivity Strain
-1. **Weight Instability in CCW-KM:** Under near-positivity violations, CCW-KM standard errors inflate substantially because rare treated units in the frail tail receive massive weights.
-2. **Robustness of Pure G-Computation (BART):** Survival-BART does not divide by propensity scores. It fits the outcome surface directly, providing a highly stable estimate with well-calibrated credible intervals.
-3. **Targeted Regularization in TTE-TMLE:** TTE-TMLE bounds the clever covariate components and estimates a scalar fluctuation parameter $\varepsilon$, preventing runaway variance while preserving double robustness.
+1. **Weight Instability in `ccw-km`:** Under near-positivity violations, `ccw-km` standard errors inflate substantially because rare treated units in the frail tail receive massive weights.
+2. **Robustness of Pure G-Computation (BART):** Survival-BART does not divide by propensity scores. It fits the outcome surface directly, providing a highly stable estimate with well-calibrated credible intervals and low FNR.
+3. **Targeted Regularization in TTE-TMLE:** TTE-TMLE bounds the clever covariate components and estimates a scalar fluctuation parameter $\varepsilon$, preventing runaway variance while preserving double robustness and high statistical power.
 
 ### 5.3 Step Visualization of Risk Difference & Multiplier Bootstrap Bands
 
@@ -256,4 +285,3 @@ p_sl +
             direction = "hv", linetype = "dashed", linewidth = 0.7) +
   scale_color_manual(name = "", values = c("Risk Difference (TMLE)" = "#2ca02c", "Oracle Ground Truth" = "#d62728"))
 ```
-

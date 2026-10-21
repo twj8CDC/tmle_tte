@@ -101,11 +101,11 @@ run_scenario1_benchmark <- function(n_iter = 10,
         runtime = time_tmle
       )
     
-    # --- Estimator 2: Parametric CCW (Hernan Weighted KM) ---
+    # --- Estimator 2: ccw-km (Hernan Weighted KM) ---
     res_ccw_b <- fit_tmle$res_log %>%
       dplyr::transmute(
         iteration = b,
-        method = "Parametric CCW (KM)",
+        method = "ccw-km",
         t = t,
         estimate = rd,
         se = rd_se,

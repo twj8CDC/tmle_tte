@@ -168,7 +168,7 @@ Notice how naive treated survival falsely stays near 1.0 during the early days d
 We fit six competing estimators to this single observational cohort:
 1. **Naive Kaplan-Meier** (misclassifies immortal person-time).
 2. **Landmark Analysis (Day 10)** (discards events $\le 10$ days).
-3. **Parametric CCW (GLM)** (standard Clone-Censor-Weighting using misspecified linear logistic models).
+3. **ccw-km** (standard Clone-Censor-Weighting Kaplan-Meier using misspecified linear logistic models).
 4. **Pure G-Computation with R-BART (`BART::mc.surv.bart`)** (nonparametric Bayesian tree ensemble using deterministic grace completion).
 5. **TTE-TMLE (Parametric GLM)** (Clone-Censor-Weighting + TMLE fluctuation targeting).
 6. **TTE-TMLE (SuperLearner Ensemble)** (Combines GLM, MARS splines with interactions `SL.earth.int`, and Random Forests `SL.ranger` for double robustness).
@@ -256,7 +256,7 @@ results_df <- tibble(
   Estimator = c(
     "Naive Unadjusted KM",
     "Landmark Analysis (Day 10)",
-    "Parametric CCW (GLM)",
+    "ccw-km (Weighted KM)",
     "Pure G-Computation (Survival-BART)",
     "TTE-TMLE (Parametric GLM)",
     "TTE-TMLE (SuperLearner Ensemble)"

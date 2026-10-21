@@ -189,6 +189,7 @@ tte_tmle <- function(data,
     ic_matrix = inf_res$ic_matrix,
     hr_summary = inf_res$hr_summary,
     data = panel_w,
+    panel_w = panel_w,
     params = list(
       grace_period = grace_period,
       tau = tau,

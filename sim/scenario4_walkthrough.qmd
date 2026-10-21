@@ -28,9 +28,9 @@ In precision oncology and surgical trials, patient outcomes are governed by two 
 
 ### 1.2 The Methodological Target: The Prognostic Precision Bonus
 Why does this scenario matter for Target Trial Emulation?
-1. **Weighting Cannot Absorb Outcome Variance:** Inverse Probability of Censoring Weighting (CCW-KM / IPTW) only reweights observations based on treatment propensity $P(A \mid W)$. Because $w_{\text{prog}}$ is conditionally independent of treatment assignment, CCW-KM cannot explain or absorb any of the massive outcome variability driven by $w_{\text{prog}}$. Consequently, CCW-KM suffers from inflated residual variance.
+1. **Weighting Cannot Absorb Outcome Variance:** Inverse Probability of Censoring Weighting (`ccw-km` / IPTW) only reweights observations based on treatment propensity $P(A \mid W)$. Because $w_{\text{prog}}$ is conditionally independent of treatment assignment, `ccw-km` cannot explain or absorb any of the massive outcome variability driven by $w_{\text{prog}}$. Consequently, `ccw-km` suffers from inflated residual variance.
 2. **TMLE Achieves the Semiparametric Efficiency Bound:** TTE-TMLE and G-computation directly model the conditional hazard $Q(t, A, x_1, w_{\text{prog}})$. By incorporating $w_{\text{prog}}$, the initial model explains substantial residual survival variation ($Y(t) - Q^*(t) \approx 0$).
-3. **The Precision Bonus:** This outcome variance reduction directly shrinks the variance of the Efficient Influence Curve ($\text{Var}(\text{EIC}) \ll \text{Var}(\text{IPCW})$), delivering a **30% to 50% reduction in standard error** and narrower confidence bands without introducing any bias.
+3. **Downstream Power & False Negative Rate (FNR) Consequences:** This outcome variance reduction directly shrinks the variance of the Efficient Influence Curve ($\text{Var}(\text{EIC}) \ll \text{Var}(\text{IPCW})$), delivering a **30% to 50% reduction in standard error**. In an underpowered trial or moderate treatment effect size, `ccw-km`'s inflated variance causes a high False Negative Rate (failing to detect a genuinely life-saving therapy), whereas TTE-TMLE retains high statistical power.
 
 ---
 
@@ -68,6 +68,7 @@ suppressPackageStartupMessages({
 # Load package modules
 invisible(lapply(list.files("../R", full.names = TRUE), source))
 source("true_values.R")
+source("evaluate_metrics.R")
 source("dgp/04_dgp_prognostic_efficiency.R")
 
 # Compute Oracle Ground Truth
@@ -110,13 +111,15 @@ As specified in the DGP, $w_{\text{prog}}$ has identical distributions between t
 
 ## 4. Model Fitting & Results Comparison
 
-We fit six competing estimators to this observational cohort:
-1. **Naive Kaplan-Meier** (misclassifies immortal person-time).
-2. **Landmark Analysis (Day 10)** (discards events occurring during grace).
-3. **Parametric CCW (GLM)** (standard Clone-Censor-Weighting using $x_1$ and $w_{\text{prog}}$).
-4. **Pure G-Computation with R-BART (`BART::mc.surv.bart`)** (absorbs $w_{\text{prog}}$ directly in the Bayesian tree ensemble).
-5. **TTE-TMLE (GLM)** (Clone-Censor-Weighting + TMLE fluctuation targeting).
-6. **TTE-TMLE (SuperLearner Ensemble)** (Combines GLM, MARS splines `SL.earth.int`, and Random Forests `SL.ranger`).
+We fit the expanded benchmark estimator hierarchy:
+1. **Naive KM:** Unadjusted observational Kaplan-Meier (severe immortal time bias).
+2. **Landmark Analysis (Day 10):** Discards all events occurring during the grace period.
+3. **td-Cox:** Time-dependent Cox model switching treatment status at the observed initiation day.
+4. **ccw-cphm:** Clone-Censor-Weighting Cox Proportional Hazards Model on the person-time panel.
+5. **ccw-km:** Clone-Censor-Weighting Kaplan-Meier (standard Hernán target trial estimator).
+6. **Pure G-Comp (Survival-BART):** Nonparametric Bayesian tree substitution model absorbing $w_{\text{prog}}$.
+7. **TTE-TMLE (GLM):** Double robust targeted minimum loss-based estimation.
+8. **TTE-TMLE (SuperLearner Ensemble):** Ensembling GLM, MARS splines, and Random Forests.
 
 ```{r run-models}
 #| code-summary: "Fit all benchmark models on Scenario 4 cohort"
@@ -133,7 +136,12 @@ s_lm <- summary(km_lm, times = 20)
 lm_rd_30 <- s_lm$surv[2] - s_lm$surv[1]
 lm_se_30 <- sqrt(sum(s_lm$std.err^2))
 
-# 3. Parametric CCW (GLM) & 5. TTE-TMLE (GLM)
+# 3. Time-Dependent Cox (td-Cox)
+td_res <- fit_td_cox(df, covars = c("x1", "w_prog"), tau = 30, grace_period = 10)
+td_rd_30 <- td_res$rd_tau
+td_se_30 <- td_res$se_rd_tau
+
+# 4. ccw-cphm & 5. ccw-km & 7. TTE-TMLE (GLM)
 fit_glm <- tte_tmle(
   df, 
   covars = c("x1", "w_prog"), 
@@ -141,12 +149,17 @@ fit_glm <- tte_tmle(
   tau = 30, 
   use_sl = FALSE
 )
-ccw_glm_rd_30 <- fit_glm$res_log$rd[30]
-ccw_glm_se_30 <- fit_glm$res_log$rd_se[30]
+ccw_km_rd_30 <- fit_glm$res_log$rd[30]
+ccw_km_se_30 <- fit_glm$res_log$rd_se[30]
 tmle_glm_rd_30 <- fit_glm$res_tmle$rd[30]
 tmle_glm_se_30 <- fit_glm$res_tmle$se_RD[30]
 
-# 4. Pure G-Computation with Nonparametric Survival BART
+# Fit CCW-CPHM on the same weighted panel
+cphm_res <- fit_ccw_cphm(fit_glm$panel_w, covars = c("x1", "w_prog"), tau = 30)
+cphm_rd_30 <- cphm_res$rd_tau
+cphm_se_30 <- cphm_res$se_rd_tau
+
+# 6. Pure G-Computation with Nonparametric Survival BART
 df_std <- prepare_tte_data(df)
 clones <- create_clones(df_std, covars = c("x1", "w_prog"), grace_period = 10, tau = 30)
 
@@ -169,7 +182,7 @@ bart_cri_lower <- bart_res$results$cri_lower[30]
 bart_cri_upper <- bart_res$results$cri_upper[30]
 bart_width_30 <- bart_res$results$cri_width[30]
 
-# 6. TTE-TMLE with SuperLearner Ensemble (GLM + Earth + Ranger)
+# 8. TTE-TMLE with SuperLearner Ensemble (GLM + Earth + Ranger)
 set.seed(42)
 fit_sl <- tte_tmle(
   df, 
@@ -190,60 +203,76 @@ tmle_sl_se_30 <- fit_sl$res_tmle$se_RD[30]
 ### 5.1 Day 30 Performance Comparison Table
 
 ```{r results-table}
-#| code-summary: "Construct comparative performance table highlighting standard error reduction"
-# Compute interval bounds
-naive_ci <- c(naive_rd_30 - 1.96 * naive_se_30, naive_rd_30 + 1.96 * naive_se_30)
-lm_ci <- c(lm_rd_30 - 1.96 * lm_se_30, lm_rd_30 + 1.96 * lm_se_30)
-ccw_glm_ci <- c(ccw_glm_rd_30 - 1.96 * ccw_glm_se_30, ccw_glm_rd_30 + 1.96 * ccw_glm_se_30)
-tmle_glm_ci <- c(tmle_glm_rd_30 - 1.96 * tmle_glm_se_30, tmle_glm_rd_30 + 1.96 * tmle_glm_se_30)
-tmle_sl_ci <- c(tmle_sl_rd_30 - 1.96 * tmle_sl_se_30, tmle_sl_rd_30 + 1.96 * tmle_sl_se_30)
+#| code-summary: "Construct comparative performance table with hypothesis testing metrics"
+estimators <- c(
+  "Naive Unadjusted KM",
+  "Landmark Analysis (Day 10)",
+  "td-Cox (Grace Switch)",
+  "ccw-cphm (Weighted Cox PH)",
+  "ccw-km (Weighted KM)",
+  "Pure G-Computation (Survival-BART)",
+  "TTE-TMLE (Parametric GLM)",
+  "TTE-TMLE (SuperLearner Ensemble)"
+)
+
+estimates <- c(naive_rd_30, lm_rd_30, td_rd_30, cphm_rd_30, ccw_km_rd_30, bart_rd_30, tmle_glm_rd_30, tmle_sl_rd_30)
+ses <- c(naive_se_30, lm_se_30, td_se_30, cphm_se_30, ccw_km_se_30, bart_se_30, tmle_glm_se_30, tmle_sl_se_30)
+
+ci_lowers <- estimates - 1.96 * ses
+ci_uppers <- estimates + 1.96 * ses
+# Replace BART bounds with posterior draws
+ci_lowers[6] <- bart_cri_lower
+ci_uppers[6] <- bart_cri_upper
+
+# Hypothesis tests against H0: RD = 0
+ht_list <- lapply(seq_along(estimates), function(i) compute_hypothesis_test(estimates[i], ses[i]))
+z_stats <- sapply(ht_list, function(x) x$z_stat)
+p_vals <- sapply(ht_list, function(x) x$p_val)
+powers <- sapply(ht_list, function(x) x$power)
+fnrs <- sapply(ht_list, function(x) x$fnr)
 
 results_df <- tibble(
-  Estimator = c(
-    "Naive Unadjusted KM",
-    "Landmark Analysis (Day 10)",
-    "Parametric CCW (GLM)",
-    "Pure G-Computation (Survival-BART)",
-    "TTE-TMLE (Parametric GLM)",
-    "TTE-TMLE (SuperLearner Ensemble)"
-  ),
-  `Estimate (RD 30)` = c(naive_rd_30, lm_rd_30, ccw_glm_rd_30, bart_rd_30, tmle_glm_rd_30, tmle_sl_rd_30),
-  `True Value` = rep(truth_rd_30, 6),
+  Estimator = estimators,
+  `Estimate (RD 30)` = estimates,
+  `True Value` = rep(truth_rd_30, length(estimators)),
   `Abs Bias` = `Estimate (RD 30)` - `True Value`,
   `Rel Bias (%)` = (`Abs Bias` / `True Value`) * 100,
-  `Standard Error` = c(naive_se_30, lm_se_30, ccw_glm_se_30, bart_se_30, tmle_glm_se_30, tmle_sl_se_30),
+  `Standard Error` = ses,
   `95% Interval Width` = c(
-    as.character(round(naive_ci[2] - naive_ci[1], 4)),
-    as.character(round(lm_ci[2] - lm_ci[1], 4)),
-    as.character(round(ccw_glm_ci[2] - ccw_glm_ci[1], 4)),
+    as.character(round(ci_uppers[1:5] - ci_lowers[1:5], 4)),
     paste0(round(bart_width_30, 4), "*"),
-    as.character(round(tmle_glm_ci[2] - tmle_glm_ci[1], 4)),
-    as.character(round(tmle_sl_ci[2] - tmle_sl_ci[1], 4))
+    as.character(round(ci_uppers[7:8] - ci_lowers[7:8], 4))
   ),
+  `Z-Statistic` = z_stats,
+  `p-value` = p_vals,
+  `Power (1 - beta)` = powers,
+  `FNR (beta)` = fnrs,
   `95% Covered` = c(
-    if_else(truth_rd_30 >= naive_ci[1] & truth_rd_30 <= naive_ci[2], "Yes", "No"),
-    if_else(truth_rd_30 >= lm_ci[1] & truth_rd_30 <= lm_ci[2], "Yes", "No"),
-    if_else(truth_rd_30 >= ccw_glm_ci[1] & truth_rd_30 <= ccw_glm_ci[2], "Yes", "No"),
+    if_else(truth_rd_30 >= ci_lowers[1] & truth_rd_30 <= ci_uppers[1], "Yes", "No"),
+    if_else(truth_rd_30 >= ci_lowers[2] & truth_rd_30 <= ci_uppers[2], "Yes", "No"),
+    if_else(truth_rd_30 >= ci_lowers[3] & truth_rd_30 <= ci_uppers[3], "Yes", "No"),
+    if_else(truth_rd_30 >= ci_lowers[4] & truth_rd_30 <= ci_uppers[4], "Yes", "No"),
+    if_else(truth_rd_30 >= ci_lowers[5] & truth_rd_30 <= ci_uppers[5], "Yes", "No"),
     if_else(truth_rd_30 >= bart_cri_lower & truth_rd_30 <= bart_cri_upper, "Yes*", "No*"),
-    if_else(truth_rd_30 >= tmle_glm_ci[1] & truth_rd_30 <= tmle_glm_ci[2], "Yes", "No"),
-    if_else(truth_rd_30 >= tmle_sl_ci[1] & truth_rd_30 <= tmle_sl_ci[2], "Yes", "No")
+    if_else(truth_rd_30 >= ci_lowers[7] & truth_rd_30 <= ci_uppers[7], "Yes", "No"),
+    if_else(truth_rd_30 >= ci_lowers[8] & truth_rd_30 <= ci_uppers[8], "Yes", "No")
   )
 )
 
 knitr::kable(results_df, digits = 4, caption = "Scenario 4 Performance Metrics at Day 30 Follow-Up (*Asterisk denotes Bayesian 95% Credible Interval from Survival-BART posterior draws)")
 ```
 
-### 5.2 Quantifying the Prognostic Precision Bonus
-Notice the dramatic difference in **Standard Error** between CCW-KM and TTE-TMLE:
+### 5.2 Quantifying the Prognostic Precision Bonus & FNR Inflation
+Notice the dramatic difference in **Standard Error** and **Power / FNR** between `ccw-km` and `TTE-TMLE`:
 
 ```{r precision-bonus}
-#| code-summary: "Calculate relative standard error reduction"
-se_ccw <- ccw_glm_se_30
+#| code-summary: "Calculate relative standard error reduction and power differences"
+se_ccw <- ccw_km_se_30
 se_tmle <- tmle_sl_se_30
 se_reduction_pct <- (1 - (se_tmle / se_ccw)) * 100
 var_ratio <- (se_ccw^2) / (se_tmle^2)
 
-cat(sprintf("CCW-KM Standard Error:     %.4f\n", se_ccw))
+cat(sprintf("ccw-km Standard Error:     %.4f\n", se_ccw))
 cat(sprintf("TTE-TMLE Standard Error:   %.4f\n", se_tmle))
 cat(sprintf("Standard Error Reduction:  %.1f%%\n", se_reduction_pct))
 cat(sprintf("Relative Efficiency Ratio: %.2fx (Equivalent sample size multiplier)\n", var_ratio))
@@ -265,4 +294,3 @@ p_sl +
             direction = "hv", linetype = "dashed", linewidth = 0.7) +
   scale_color_manual(name = "", values = c("Risk Difference (TMLE)" = "#2ca02c", "Oracle Ground Truth" = "#d62728"))
 ```
-
