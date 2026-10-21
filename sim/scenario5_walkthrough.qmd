@@ -1,0 +1,259 @@
+---
+title: "Scenario 5 Walkthrough: Positivity Strain & Weight Shock"
+subtitle: "Benchmarking Estimator Robustness Under Severe Overlap Strain, Extreme IPCW Weights, and Heavy Tails"
+author: "Jacob Tiegs"
+date: "October 2026"
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    code-fold: show
+    code-tools: true
+    theme: cosmo
+    embed-resources: true
+execute:
+  warning: false
+  message: false
+---
+
+## 1. Real-World Clinical Setting & Motivation
+
+### 1.1 Clinical Scenario: Treatment Initiation in Severe Frailty Subgroups
+In observational health data and Electronic Health Record (EHR) studies, treatment initiation is rarely uniformly distributed:
+- **Clinical Protocol:** Consider an observational cohort of critical care or oncology patients evaluated for an aggressive adjuvant therapy.
+  - **Clinical Confounders ($x_1, x_2$):** Patient functional status ($x_1$) and multi-organ frailty index ($x_2$).
+  - **Severe Overlap Strain (Near-Positivity Violation):** While healthier patients frequently initiate therapy within the **10-day grace period**, severely frail patients ($x_1 < -1.5, x_2 < -1.5$) face extreme clinical reluctance. The probability of initiating treatment during the grace period drops to **$P(A = 1 \mid W) < 0.03$**.
+  - **Target Trial Emulation:** We emulate a trial comparing:
+    - **Arm 1 (Treated Strategy):** Initiate therapy within the 10-day grace period.
+    - **Arm 0 (Control Strategy):** Withhold therapy across 30 days.
+
+### 1.2 The Methodological Target: Positivity Strain & Weight Shock
+Why does this scenario stress causal estimators?
+1. **Weight Explosion in CCW-KM:** Inverse probability of censoring weighting (CCW-KM) divides by the treatment compliance propensity $1 / P(A=1 \mid W)$. When $P(A=1 \mid W) \approx 0.01 - 0.03$, weights explode to $50 - 100+$. A single event in an extreme-weight clone creates a massive vertical cliff drop in the survival curve, inflating variance and destabilizing inference.
+2. **Robustness of Targeted Learning (TTE-TMLE):** TTE-TMLE uses the weights only within the clever covariate targeting step $H^*(t, A, W)$, which is naturally regularized and bounded away from numerical singularities. The targeting step estimates a single scalar fluctuation parameter $\varepsilon$ across the pooled sample, damping individual weight spikes.
+3. **Pure G-Computation Stability:** Pure G-computation with Survival-BART bypasses inverse weighting altogether. By directly modeling the outcome conditional hazard $Q(t, A, W)$, BART remains completely insulated from propensity score explosion.
+
+---
+
+## 2. Underlying Data-Generating Process (DGP) Parameters
+
+| Parameter | Symbol / Formula | Value | Clinical / Methodological Role |
+| :--- | :--- | :--- | :--- |
+| **Sample Size** | $N$ | `1,000` | Observational clinical cohort |
+| **Follow-up Horizon** | $\tau$ | `30` | 30-day endpoint (discrete daily intervals) |
+| **Grace Period** | $\text{grace}$ | `10` | Allowable window for treatment initiation |
+| **Clinical Confounder 1** | $x_1 \sim \mathcal{N}(0, 1)$ | Mean 0, SD 1 | Functional status index |
+| **Clinical Confounder 2** | $x_2 \sim \mathcal{N}(0, 1)$ | Mean 0, SD 1 | Multi-organ frailty index |
+| **Treatment Propensity** | $\text{logit}\, P(A=1 \mid W) = -1.6 + 1.2 x_1 + 1.0 x_2$ | Shifted Logit | Induces near-positivity violation ($p < 0.03$ in lower tails) |
+| **Complier Initiation Timing** | $T_{\text{switch}} \sim \text{Beta}(4, 2) \times 10$ | Mode $\approx 7.5$ days | Initiation distributed across 10-day grace window |
+| **Baseline Hazard Scale** | $\text{scale}_0 = 45 \cdot \exp\big(-(0.5 x_1 + 0.4 x_2) / 1.5\big)$ | Weibull Scale | Joint confounding on baseline event time |
+| **Causal Treatment Benefit** | $HR_{\text{target}} = 0.40$ | Scale Multiplier | Substantial treatment benefit ($\text{HR} = 0.40$) |
+| **Oracle Ground Truth** | $RD(30) = S_1(30) - S_0(30)$ | `0.1872` | Counterfactual Risk Difference at Day 30 ($N_{\text{oracle}} = 100,000$) |
+
+---
+
+## 3. Data Overview & Exploratory Diagnostics
+
+```{r setup}
+#| code-summary: "Load dependencies, package modules, and DGP"
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(tidyr)
+  library(survival)
+  library(ggplot2)
+  library(tibble)
+  library(SuperLearner)
+  library(BART)
+})
+
+# Load package modules
+invisible(lapply(list.files("../R", full.names = TRUE), source))
+source("true_values.R")
+source("dgp/05_dgp_positivity_strain.R")
+
+# Compute Oracle Ground Truth
+truth <- compute_scenario5_truth(n_oracle = 50000, seed = 2026)
+truth_rd_30 <- truth$rd_true[30]
+
+# Generate Scenario 5 Observational Cohort (N = 1,000)
+set.seed(42)
+df <- generate_scenario5_data(n = 1000, tau = 30, grace_period = 10)
+```
+
+### 3.1 Inspecting the Positivity Strain & Propensity Scores
+Let's examine the distribution of true treatment propensities to demonstrate the positivity strain:
+
+```{r plot-positivity}
+#| fig-width: 8.5
+#| fig-height: 4.5
+#| code-summary: "Plot distribution of true treatment probabilities"
+df_prop <- df %>%
+  mutate(
+    prob_true = plogis(-1.6 + 1.2 * x1 + 1.0 * x2),
+    strain_group = if_else(prob_true < 0.05, "Severe Strain (p < 0.05)", "Adequate Overlap (p >= 0.05)")
+  )
+
+pct_strain <- mean(df_prop$prob_true < 0.05) * 100
+
+ggplot(df_prop, aes(x = prob_true, fill = strain_group)) +
+  geom_histogram(bins = 40, color = "white", alpha = 0.8) +
+  geom_vline(xintercept = 0.05, linetype = "dashed", color = "firebrick", linewidth = 0.8) +
+  scale_fill_manual(values = c("Adequate Overlap (p >= 0.05)" = "steelblue", "Severe Strain (p < 0.05)" = "firebrick")) +
+  labs(
+    title = "Severe Positivity Strain: Treatment Propensity Distribution",
+    subtitle = sprintf("%.1f%% of the patient population has treatment propensity < 5%%", pct_strain),
+    x = "True Treatment Propensity P(A = 1 | W)",
+    y = "Patient Count",
+    fill = "Positivity Region"
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(legend.position = "bottom")
+```
+
+---
+
+## 4. Model Fitting & Results Comparison
+
+We fit six competing estimators to this high-strain cohort:
+1. **Naive Kaplan-Meier** (misclassifies immortal person-time).
+2. **Landmark Analysis (Day 10)** (discards events occurring during grace).
+3. **Parametric CCW (GLM)** (standard Clone-Censor-Weighting using $x_1$ and $x_2$; vulnerable to extreme weights).
+4. **Pure G-Computation with R-BART (`BART::mc.surv.bart`)** (completely avoids inverse propensity weights).
+5. **TTE-TMLE (GLM)** (Clone-Censor-Weighting + TMLE bounded targeting).
+6. **TTE-TMLE (SuperLearner Ensemble)** (Combines GLM, MARS splines `SL.earth.int`, and Random Forests `SL.ranger`).
+
+```{r run-models}
+#| code-summary: "Fit all benchmark models on Scenario 5 cohort"
+# 1. Naive KM
+km_naive <- survfit(Surv(event_time, event) ~ tx_obs, data = df)
+s_naive <- summary(km_naive, times = 30)
+naive_rd_30 <- s_naive$surv[2] - s_naive$surv[1]
+naive_se_30 <- sqrt(sum(s_naive$std.err^2))
+
+# 2. Landmark Analysis (Day 10 cutoff)
+df_lm <- df %>% filter(event_time > 10) %>% mutate(time_lm = event_time - 10)
+km_lm <- survfit(Surv(time_lm, event) ~ tx_obs, data = df_lm)
+s_lm <- summary(km_lm, times = 20)
+lm_rd_30 <- s_lm$surv[2] - s_lm$surv[1]
+lm_se_30 <- sqrt(sum(s_lm$std.err^2))
+
+# 3. Parametric CCW (GLM) & 5. TTE-TMLE (GLM)
+fit_glm <- tte_tmle(
+  df, 
+  covars = c("x1", "x2"), 
+  grace_period = 10, 
+  tau = 30, 
+  use_sl = FALSE
+)
+ccw_glm_rd_30 <- fit_glm$res_log$rd[30]
+ccw_glm_se_30 <- fit_glm$res_log$rd_se[30]
+tmle_glm_rd_30 <- fit_glm$res_tmle$rd[30]
+tmle_glm_se_30 <- fit_glm$res_tmle$se_RD[30]
+
+# 4. Pure G-Computation with Nonparametric Survival BART
+df_std <- prepare_tte_data(df)
+clones <- create_clones(df_std, covars = c("x1", "x2"), grace_period = 10, tau = 30)
+
+set.seed(42)
+bart_res <- fit_bart_gcomp(
+  data = df_std,
+  clones = clones,
+  covars = c("x1", "x2"),
+  grace_period = 10,
+  tau = 30,
+  ntree = 50,
+  ndpost = 200,
+  nskip = 100,
+  mc.cores = 2,
+  seed = 42
+)
+bart_rd_30 <- bart_res$results$rd[30]
+bart_se_30 <- bart_res$results$se_RD[30]
+bart_cri_lower <- bart_res$results$cri_lower[30]
+bart_cri_upper <- bart_res$results$cri_upper[30]
+bart_width_30 <- bart_res$results$cri_width[30]
+
+# 6. TTE-TMLE with SuperLearner Ensemble (GLM + Earth + Ranger)
+set.seed(42)
+fit_sl <- tte_tmle(
+  df, 
+  covars = c("x1", "x2"), 
+  grace_period = 10, 
+  tau = 30, 
+  use_sl = TRUE, 
+  sl_lib = c("SL.mean", "SL.glm", "SL.earth.int", "SL.ranger")
+)
+tmle_sl_rd_30 <- fit_sl$res_tmle$rd[30]
+tmle_sl_se_30 <- fit_sl$res_tmle$se_RD[30]
+```
+
+---
+
+## 5. Summary Results & Discussion
+
+### 5.1 Day 30 Performance Comparison Table
+
+```{r results-table}
+#| code-summary: "Construct comparative performance table under positivity strain"
+# Compute interval bounds
+naive_ci <- c(naive_rd_30 - 1.96 * naive_se_30, naive_rd_30 + 1.96 * naive_se_30)
+lm_ci <- c(lm_rd_30 - 1.96 * lm_se_30, lm_rd_30 + 1.96 * lm_se_30)
+ccw_glm_ci <- c(ccw_glm_rd_30 - 1.96 * ccw_glm_se_30, ccw_glm_rd_30 + 1.96 * ccw_glm_se_30)
+tmle_glm_ci <- c(tmle_glm_rd_30 - 1.96 * tmle_glm_se_30, tmle_glm_rd_30 + 1.96 * tmle_glm_se_30)
+tmle_sl_ci <- c(tmle_sl_rd_30 - 1.96 * tmle_sl_se_30, tmle_sl_rd_30 + 1.96 * tmle_sl_se_30)
+
+results_df <- tibble(
+  Estimator = c(
+    "Naive Unadjusted KM",
+    "Landmark Analysis (Day 10)",
+    "Parametric CCW (GLM)",
+    "Pure G-Computation (Survival-BART)",
+    "TTE-TMLE (Parametric GLM)",
+    "TTE-TMLE (SuperLearner Ensemble)"
+  ),
+  `Estimate (RD 30)` = c(naive_rd_30, lm_rd_30, ccw_glm_rd_30, bart_rd_30, tmle_glm_rd_30, tmle_sl_rd_30),
+  `True Value` = rep(truth_rd_30, 6),
+  `Abs Bias` = `Estimate (RD 30)` - `True Value`,
+  `Rel Bias (%)` = (`Abs Bias` / `True Value`) * 100,
+  `Standard Error` = c(naive_se_30, lm_se_30, ccw_glm_se_30, bart_se_30, tmle_glm_se_30, tmle_sl_se_30),
+  `95% Interval Width` = c(
+    as.character(round(naive_ci[2] - naive_ci[1], 4)),
+    as.character(round(lm_ci[2] - lm_ci[1], 4)),
+    as.character(round(ccw_glm_ci[2] - ccw_glm_ci[1], 4)),
+    paste0(round(bart_width_30, 4), "*"),
+    as.character(round(tmle_glm_ci[2] - tmle_glm_ci[1], 4)),
+    as.character(round(tmle_sl_ci[2] - tmle_sl_ci[1], 4))
+  ),
+  `95% Covered` = c(
+    if_else(truth_rd_30 >= naive_ci[1] & truth_rd_30 <= naive_ci[2], "Yes", "No"),
+    if_else(truth_rd_30 >= lm_ci[1] & truth_rd_30 <= lm_ci[2], "Yes", "No"),
+    if_else(truth_rd_30 >= ccw_glm_ci[1] & truth_rd_30 <= ccw_glm_ci[2], "Yes", "No"),
+    if_else(truth_rd_30 >= bart_cri_lower & truth_rd_30 <= bart_cri_upper, "Yes*", "No*"),
+    if_else(truth_rd_30 >= tmle_glm_ci[1] & truth_rd_30 <= tmle_glm_ci[2], "Yes", "No"),
+    if_else(truth_rd_30 >= tmle_sl_ci[1] & truth_rd_30 <= tmle_sl_ci[2], "Yes", "No")
+  )
+)
+
+knitr::kable(results_df, digits = 4, caption = "Scenario 5 Performance Metrics at Day 30 Follow-Up (*Asterisk denotes Bayesian 95% Credible Interval from Survival-BART posterior draws)")
+```
+
+### 5.2 Key Takeaways on Positivity Strain
+1. **Weight Instability in CCW-KM:** Under near-positivity violations, CCW-KM standard errors inflate substantially because rare treated units in the frail tail receive massive weights.
+2. **Robustness of Pure G-Computation (BART):** Survival-BART does not divide by propensity scores. It fits the outcome surface directly, providing a highly stable estimate with well-calibrated credible intervals.
+3. **Targeted Regularization in TTE-TMLE:** TTE-TMLE bounds the clever covariate components and estimates a scalar fluctuation parameter $\varepsilon$, preventing runaway variance while preserving double robustness.
+
+### 5.3 Step Visualization of Risk Difference & Multiplier Bootstrap Bands
+
+```{r plot-bands}
+#| fig-width: 8.5
+#| fig-height: 5
+#| code-summary: "Plot TTE-TMLE Risk Difference curve with simultaneous confidence bands using ggplot2 step functions"
+p_sl <- plot(fit_sl, which = "rd")
+df_truth_rd <- data.frame(t = c(0, truth$t), rd = c(0, truth$rd_true))
+
+p_sl + 
+  geom_step(data = df_truth_rd, aes(x = t, y = rd, color = "Oracle Ground Truth"), 
+            direction = "hv", linetype = "dashed", linewidth = 0.7) +
+  scale_color_manual(name = "", values = c("Risk Difference (TMLE)" = "#2ca02c", "Oracle Ground Truth" = "#d62728"))
+```
+

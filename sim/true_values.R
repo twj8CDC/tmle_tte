@@ -347,3 +347,156 @@ compute_scenario3_truth <- function(n_oracle = 100000,
   return(truth_df)
 }
 
+
+
+#' Ground Truth Counterfactual Value Generator for Scenario 4 (Prognostic Efficiency)
+#'
+#' @description Computes exact counterfactual survival curves and causal estimands
+#'   under Scenario 4 with a strong prognostic biomarker independent of treatment assignment (N = 100,000).
+#'
+#' @param n_oracle Sample size for oracle counterfactual population (default 100,000).
+#' @param tau Maximum follow-up horizon (default 30).
+#' @param grace_period Maximum treatment initiation delay in days (default 10).
+#' @param shape Weibull shape parameter (default 1.5).
+#' @param base_scale Baseline scale parameter (default 45).
+#' @param coef_w Confounder effect on baseline hazard (default 0.4).
+#' @param coef_prog Prognostic biomarker effect on baseline hazard (default 0.9).
+#' @param hr_target Base treatment effect hazard ratio (default 0.35).
+#' @param seed Random seed for reproducibility.
+#'
+#' @return A tibble with columns t, S0_true, S1_true, rd_true, hr_true.
+#' @export
+compute_scenario4_truth <- function(n_oracle = 100000,
+                                    tau = 30,
+                                    grace_period = 10,
+                                    shape = 1.5,
+                                    base_scale = 45,
+                                    coef_w = 0.4,
+                                    coef_prog = 0.9,
+                                    hr_target = 0.35,
+                                    seed = 99999) {
+  
+  if (!is.null(seed)) set.seed(seed)
+  
+  # 1. Baseline Covariates
+  x1 <- stats::rnorm(n_oracle, mean = 0, sd = 1)
+  w_prog <- stats::rnorm(n_oracle, mean = 0, sd = 1)
+  
+  # 2. Weibull Scales
+  lin_pred_0 <- coef_w * x1 + coef_prog * w_prog
+  scale_0 <- base_scale * exp(- lin_pred_0 / shape)
+  scale_t <- scale_0 * (hr_target)^(-1 / shape)
+  
+  # 3. Strategy 0: Never Treat
+  u0 <- stats::runif(n_oracle)
+  h_target0 <- -log(u0)
+  t_event_0 <- scale_0 * (h_target0)^(1 / shape)
+  
+  # 4. Strategy 1: Treat <= Grace
+  t_switch_1 <- pmax(1, pmin(grace_period, round(stats::rbeta(n_oracle, 4, 2) * grace_period)))
+  u1 <- stats::runif(n_oracle)
+  h_target1 <- -log(u1)
+  h_at_switch <- (t_switch_1 / scale_0)^shape
+  
+  t_event_1 <- ifelse(
+    h_target1 <= h_at_switch,
+    scale_0 * (h_target1)^(1 / shape),
+    ((h_target1 - h_at_switch) * (scale_t^shape) + (t_switch_1^shape))^(1 / shape)
+  )
+  
+  # 5. Marginal Survival Curves
+  days <- seq_len(tau)
+  s0_vec <- numeric(tau)
+  s1_vec <- numeric(tau)
+  
+  for (d in days) {
+    s0_vec[d] <- mean(t_event_0 > d)
+    s1_vec[d] <- mean(t_event_1 > d)
+  }
+  
+  truth_df <- tibble::tibble(
+    t = days,
+    S0_true = s0_vec,
+    S1_true = s1_vec,
+    rd_true = s1_vec - s0_vec,
+    hr_true = log(pmax(s1_vec, 1e-6)) / log(pmax(s0_vec, 1e-6))
+  )
+  
+  return(truth_df)
+}
+
+#' Ground Truth Counterfactual Value Generator for Scenario 5 (Positivity Strain & Weight Shock)
+#'
+#' @description Computes exact counterfactual survival curves and causal estimands
+#'   under Scenario 5 with severe overlap strain / near-positivity violation (N = 100,000).
+#'
+#' @param n_oracle Sample size for oracle counterfactual population (default 100,000).
+#' @param tau Maximum follow-up horizon (default 30).
+#' @param grace_period Maximum treatment initiation delay in days (default 10).
+#' @param shape Weibull shape parameter (default 1.5).
+#' @param base_scale Baseline scale parameter (default 45).
+#' @param coef_w1 Confounder 1 effect on baseline hazard (default 0.5).
+#' @param coef_w2 Confounder 2 effect on baseline hazard (default 0.4).
+#' @param hr_target Base treatment effect hazard ratio (default 0.40).
+#' @param seed Random seed for reproducibility.
+#'
+#' @return A tibble with columns t, S0_true, S1_true, rd_true, hr_true.
+#' @export
+compute_scenario5_truth <- function(n_oracle = 100000,
+                                    tau = 30,
+                                    grace_period = 10,
+                                    shape = 1.5,
+                                    base_scale = 45,
+                                    coef_w1 = 0.5,
+                                    coef_w2 = 0.4,
+                                    hr_target = 0.40,
+                                    seed = 99999) {
+  
+  if (!is.null(seed)) set.seed(seed)
+  
+  # 1. Baseline Covariates
+  x1 <- stats::rnorm(n_oracle, mean = 0, sd = 1)
+  x2 <- stats::rnorm(n_oracle, mean = 0, sd = 1)
+  
+  # 2. Weibull Scales
+  lin_pred_0 <- coef_w1 * x1 + coef_w2 * x2
+  scale_0 <- base_scale * exp(- lin_pred_0 / shape)
+  scale_t <- scale_0 * (hr_target)^(-1 / shape)
+  
+  # 3. Strategy 0: Never Treat
+  u0 <- stats::runif(n_oracle)
+  h_target0 <- -log(u0)
+  t_event_0 <- scale_0 * (h_target0)^(1 / shape)
+  
+  # 4. Strategy 1: Treat <= Grace
+  t_switch_1 <- pmax(1, pmin(grace_period, round(stats::rbeta(n_oracle, 4, 2) * grace_period)))
+  u1 <- stats::runif(n_oracle)
+  h_target1 <- -log(u1)
+  h_at_switch <- (t_switch_1 / scale_0)^shape
+  
+  t_event_1 <- ifelse(
+    h_target1 <= h_at_switch,
+    scale_0 * (h_target1)^(1 / shape),
+    ((h_target1 - h_at_switch) * (scale_t^shape) + (t_switch_1^shape))^(1 / shape)
+  )
+  
+  # 5. Marginal Survival Curves
+  days <- seq_len(tau)
+  s0_vec <- numeric(tau)
+  s1_vec <- numeric(tau)
+  
+  for (d in days) {
+    s0_vec[d] <- mean(t_event_0 > d)
+    s1_vec[d] <- mean(t_event_1 > d)
+  }
+  
+  truth_df <- tibble::tibble(
+    t = days,
+    S0_true = s0_vec,
+    S1_true = s1_vec,
+    rd_true = s1_vec - s0_vec,
+    hr_true = log(pmax(s1_vec, 1e-6)) / log(pmax(s0_vec, 1e-6))
+  )
+  
+  return(truth_df)
+}
