@@ -249,7 +249,14 @@ lm_se_15 <- sqrt(sum(s_lm_15$std.err^2))
 lm_rd_30 <- s_lm_30$surv[2] - s_lm_30$surv[1]
 lm_se_30 <- sqrt(sum(s_lm_30$std.err^2))
 
-# 3. Parametric CCW (GLM) & 5. TTE-TMLE (GLM)
+# 3. Time-Dependent Cox (td-Cox)
+td_res <- fit_td_cox(df, covars = "x1", tau = 30, grace_period = 10)
+td_rd_15 <- td_res$rd[15]
+td_se_15 <- abs(td_res$rd[15]) * sqrt(stats::vcov(td_res$model)["tx_td", "tx_td"])
+td_rd_30 <- td_res$rd_tau
+td_se_30 <- td_res$se_rd_tau
+
+# 4. ccw-km (Weighted KM) & 5. TTE-TMLE (GLM)
 fit_glm <- tte_tmle(
   df, 
   covars = c("x1"), 
@@ -267,7 +274,16 @@ tmle_glm_se_15 <- fit_glm$res_tmle$se_RD[15]
 tmle_glm_rd_30 <- fit_glm$res_tmle$rd[30]
 tmle_glm_se_30 <- fit_glm$res_tmle$se_RD[30]
 
-# 4. Pure G-Computation with Nonparametric Survival-BART
+# Fit CCW-CPHM on the same weighted panel
+cphm_res <- fit_ccw_cphm(fit_glm$panel_w, covars = "x1", tau = 30)
+sf_cphm <- survival::survfit(cphm_res$model, newdata = data.frame(arm = c("control_no_tx", "treat_tx"), id = c("1", "2"), x1 = 0))
+s_cphm_15 <- summary(sf_cphm, times = 15)
+cphm_rd_15 <- s_cphm_15$surv[2] - s_cphm_15$surv[1]
+cphm_se_15 <- sqrt(sum(s_cphm_15$std.err^2))
+cphm_rd_30 <- cphm_res$rd_tau
+cphm_se_30 <- cphm_res$se_rd_tau
+
+# 6. Pure G-Computation with Nonparametric Survival-BART
 df_std <- prepare_tte_data(df)
 clones <- create_clones(df_std, covars = c("x1"), grace_period = 10, tau = 30)
 
@@ -296,7 +312,26 @@ bart_cri_lower_30 <- bart_res$results$cri_lower[30]
 bart_cri_upper_30 <- bart_res$results$cri_upper[30]
 bart_width_30 <- bart_res$results$cri_width[30]
 
-# 6. TTE-TMLE with Pure BART Nuisance Models (P and Q) & Simultaneous Bands
+# 7. TMLE + BART (Targeted Survival-BART with Longitudinal IPTW Targeting)
+set.seed(42)
+bart_tmle_res <- fit_bart_tmle(
+  data = df_std,
+  clones = clones,
+  covars = "x1",
+  grace_period = 10,
+  tau = 30,
+  ntree = 50,
+  ndpost = 200,
+  nskip = 100,
+  mc.cores = 2,
+  seed = 42
+)
+bart_tmle_rd_15 <- bart_tmle_res$results$rd[15]
+bart_tmle_se_15 <- bart_tmle_res$results$se_RD[15]
+bart_tmle_rd_30 <- bart_tmle_res$results$rd[30]
+bart_tmle_se_30 <- bart_tmle_res$results$se_RD[30]
+
+# 8. TTE-TMLE with Pure BART Nuisance Models (P and Q) & Simultaneous Bands
 set.seed(42)
 fit_sl <- tte_tmle(
   df, 
@@ -320,37 +355,49 @@ tmle_sl_se_30 <- fit_sl$res_tmle$se_RD[30]
 
 ```{r results-table}
 #| code-summary: "Construct comparative performance tables for Day 15 and Day 30"
-# Day 15 Bounds
-ci_naive_15 <- c(naive_rd_15 - 1.96 * naive_se_15, naive_rd_15 + 1.96 * naive_se_15)
-ci_lm_15    <- c(lm_rd_15 - 1.96 * lm_se_15, lm_rd_15 + 1.96 * lm_se_15)
-ci_ccw_15   <- c(ccw_glm_rd_15 - 1.96 * ccw_glm_se_15, ccw_glm_rd_15 + 1.96 * ccw_glm_se_15)
-ci_tglm_15  <- c(tmle_glm_rd_15 - 1.96 * tmle_glm_se_15, tmle_glm_rd_15 + 1.96 * tmle_glm_se_15)
-ci_tsl_15   <- c(tmle_sl_rd_15 - 1.96 * tmle_sl_se_15, tmle_sl_rd_15 + 1.96 * tmle_sl_se_15)
+estimators <- c(
+  "Naive Unadjusted KM",
+  "Landmark Analysis (Day 10)",
+  "td-Cox (Grace Switch)",
+  "ccw-cphm (Weighted Cox PH)",
+  "ccw-km (Weighted KM)",
+  "Pure G-Computation (Survival-BART)",
+  "TMLE + BART (Targeted Survival-BART)",
+  "TTE-TMLE (GLM)",
+  "TTE-TMLE (BART)"
+)
+
+# Day 15
+est_15 <- c(naive_rd_15, lm_rd_15, td_rd_15, cphm_rd_15, ccw_glm_rd_15, bart_rd_15, bart_tmle_rd_15, tmle_glm_rd_15, tmle_sl_rd_15)
+ses_15 <- c(naive_se_15, lm_se_15, td_se_15, cphm_se_15, ccw_glm_se_15, bart_se_15, bart_tmle_se_15, tmle_glm_se_15, tmle_sl_se_15)
+
+ci_lowers_15 <- est_15 - 1.96 * ses_15
+ci_uppers_15 <- est_15 + 1.96 * ses_15
+ci_lowers_15[6] <- bart_cri_lower_15
+ci_uppers_15[6] <- bart_cri_upper_15
 
 res_15 <- tibble(
-  Estimator = c(
-    "Naive Unadjusted KM", "Landmark Analysis (Day 10)", "ccw-km (Weighted KM)",
-    "Pure G-Computation (Survival-BART)", "TTE-TMLE (GLM)", "TTE-TMLE (BART)"
-  ),
-  `Estimate (RD 15)` = c(naive_rd_15, lm_rd_15, ccw_glm_rd_15, bart_rd_15, tmle_glm_rd_15, tmle_sl_rd_15),
-  `True Value` = rep(truth_rd_15, 6),
-  `Abs Bias` = `Estimate (RD 15)` - `True Value`,
-  `Standard Error` = c(naive_se_15, lm_se_15, ccw_glm_se_15, bart_se_15, tmle_glm_se_15, tmle_sl_se_15),
+  Estimator = estimators,
+  `Estimate (RD 15)` = est_15,
+  `True Value` = rep(truth_rd_15, length(estimators)),
+  `Abs Bias` = est_15 - truth_rd_15,
+  `Rel Bias (%)` = ((est_15 - truth_rd_15) / truth_rd_15) * 100,
+  `Standard Error` = ses_15,
   `95% Interval Width` = c(
-    as.character(round(ci_naive_15[2] - ci_naive_15[1], 4)),
-    as.character(round(ci_lm_15[2] - ci_lm_15[1], 4)),
-    as.character(round(ci_ccw_15[2] - ci_ccw_15[1], 4)),
+    as.character(round(ci_uppers_15[1:5] - ci_lowers_15[1:5], 4)),
     paste0(round(bart_width_15, 4), "*"),
-    as.character(round(ci_tglm_15[2] - ci_tglm_15[1], 4)),
-    as.character(round(ci_tsl_15[2] - ci_tsl_15[1], 4))
+    as.character(round(ci_uppers_15[7:9] - ci_lowers_15[7:9], 4))
   ),
   `95% Covered` = c(
-    if_else(truth_rd_15 >= ci_naive_15[1] & truth_rd_15 <= ci_naive_15[2], "Yes", "No"),
-    if_else(truth_rd_15 >= ci_lm_15[1] & truth_rd_15 <= ci_lm_15[2], "Yes", "No"),
-    if_else(truth_rd_15 >= ci_ccw_15[1] & truth_rd_15 <= ci_ccw_15[2], "Yes", "No"),
+    if_else(truth_rd_15 >= ci_lowers_15[1] & truth_rd_15 <= ci_uppers_15[1], "Yes", "No"),
+    if_else(truth_rd_15 >= ci_lowers_15[2] & truth_rd_15 <= ci_uppers_15[2], "Yes", "No"),
+    if_else(truth_rd_15 >= ci_lowers_15[3] & truth_rd_15 <= ci_uppers_15[3], "Yes", "No"),
+    if_else(truth_rd_15 >= ci_lowers_15[4] & truth_rd_15 <= ci_uppers_15[4], "Yes", "No"),
+    if_else(truth_rd_15 >= ci_lowers_15[5] & truth_rd_15 <= ci_uppers_15[5], "Yes", "No"),
     if_else(truth_rd_15 >= bart_cri_lower_15 & truth_rd_15 <= bart_cri_upper_15, "Yes*", "No*"),
-    if_else(truth_rd_15 >= ci_tglm_15[1] & truth_rd_15 <= ci_tglm_15[2], "Yes", "No"),
-    if_else(truth_rd_15 >= ci_tsl_15[1] & truth_rd_15 <= ci_tsl_15[2], "Yes", "No")
+    if_else(truth_rd_15 >= ci_lowers_15[7] & truth_rd_15 <= ci_uppers_15[7], "Yes", "No"),
+    if_else(truth_rd_15 >= ci_lowers_15[8] & truth_rd_15 <= ci_uppers_15[8], "Yes", "No"),
+    if_else(truth_rd_15 >= ci_lowers_15[9] & truth_rd_15 <= ci_uppers_15[9], "Yes", "No")
   )
 )
 
@@ -359,37 +406,36 @@ knitr::kable(res_15, digits = 4, caption = "Scenario 3 Day 15 (Peak Acute Effica
 
 ```{r results-table-30}
 #| code-summary: "Construct Day 30 Performance Table"
-# Day 30 Bounds
-ci_naive_30 <- c(naive_rd_30 - 1.96 * naive_se_30, naive_rd_30 + 1.96 * naive_se_30)
-ci_lm_30    <- c(lm_rd_30 - 1.96 * lm_se_30, lm_rd_30 + 1.96 * lm_se_30)
-ci_ccw_30   <- c(ccw_glm_rd_30 - 1.96 * ccw_glm_se_30, ccw_glm_rd_30 + 1.96 * ccw_glm_se_30)
-ci_tglm_30  <- c(tmle_glm_rd_30 - 1.96 * tmle_glm_se_30, tmle_glm_rd_30 + 1.96 * tmle_glm_se_30)
-ci_tsl_30   <- c(tmle_sl_rd_30 - 1.96 * tmle_sl_se_30, tmle_sl_rd_30 + 1.96 * tmle_sl_se_30)
+est_30 <- c(naive_rd_30, lm_rd_30, td_rd_30, cphm_rd_30, ccw_glm_rd_30, bart_rd_30, bart_tmle_rd_30, tmle_glm_rd_30, tmle_sl_rd_30)
+ses_30 <- c(naive_se_30, lm_se_30, td_se_30, cphm_se_30, ccw_glm_se_30, bart_se_30, bart_tmle_se_30, tmle_glm_se_30, tmle_sl_se_30)
+
+ci_lowers_30 <- est_30 - 1.96 * ses_30
+ci_uppers_30 <- est_30 + 1.96 * ses_30
+ci_lowers_30[6] <- bart_cri_lower_30
+ci_uppers_30[6] <- bart_cri_upper_30
 
 res_30 <- tibble(
-  Estimator = c(
-    "Naive Unadjusted KM", "Landmark Analysis (Day 10)", "ccw-km (Weighted KM)",
-    "Pure G-Computation (Survival-BART)", "TTE-TMLE (GLM)", "TTE-TMLE (BART)"
-  ),
-  `Estimate (RD 30)` = c(naive_rd_30, lm_rd_30, ccw_glm_rd_30, bart_rd_30, tmle_glm_rd_30, tmle_sl_rd_30),
-  `True Value` = rep(truth_rd_30, 6),
-  `Abs Bias` = `Estimate (RD 30)` - `True Value`,
-  `Standard Error` = c(naive_se_30, lm_se_30, ccw_glm_se_30, bart_se_30, tmle_glm_se_30, tmle_sl_se_30),
+  Estimator = estimators,
+  `Estimate (RD 30)` = est_30,
+  `True Value` = rep(truth_rd_30, length(estimators)),
+  `Abs Bias` = est_30 - truth_rd_30,
+  `Rel Bias (%)` = ((est_30 - truth_rd_30) / truth_rd_30) * 100,
+  `Standard Error` = ses_30,
   `95% Interval Width` = c(
-    as.character(round(ci_naive_30[2] - ci_naive_30[1], 4)),
-    as.character(round(ci_lm_30[2] - ci_lm_30[1], 4)),
-    as.character(round(ci_ccw_30[2] - ci_ccw_30[1], 4)),
+    as.character(round(ci_uppers_30[1:5] - ci_lowers_30[1:5], 4)),
     paste0(round(bart_width_30, 4), "*"),
-    as.character(round(ci_tglm_30[2] - ci_tglm_30[1], 4)),
-    as.character(round(ci_tsl_30[2] - ci_tsl_30[1], 4))
+    as.character(round(ci_uppers_30[7:9] - ci_lowers_30[7:9], 4))
   ),
   `95% Covered` = c(
-    if_else(truth_rd_30 >= ci_naive_30[1] & truth_rd_30 <= ci_naive_30[2], "Yes", "No"),
-    if_else(truth_rd_30 >= ci_lm_30[1] & truth_rd_30 <= ci_lm_30[2], "Yes", "No"),
-    if_else(truth_rd_30 >= ci_ccw_30[1] & truth_rd_30 <= ci_ccw_30[2], "Yes", "No"),
+    if_else(truth_rd_30 >= ci_lowers_30[1] & truth_rd_30 <= ci_uppers_30[1], "Yes", "No"),
+    if_else(truth_rd_30 >= ci_lowers_30[2] & truth_rd_30 <= ci_uppers_30[2], "Yes", "No"),
+    if_else(truth_rd_30 >= ci_lowers_30[3] & truth_rd_30 <= ci_uppers_30[3], "Yes", "No"),
+    if_else(truth_rd_30 >= ci_lowers_30[4] & truth_rd_30 <= ci_uppers_30[4], "Yes", "No"),
+    if_else(truth_rd_30 >= ci_lowers_30[5] & truth_rd_30 <= ci_uppers_30[5], "Yes", "No"),
     if_else(truth_rd_30 >= bart_cri_lower_30 & truth_rd_30 <= bart_cri_upper_30, "Yes*", "No*"),
-    if_else(truth_rd_30 >= ci_tglm_30[1] & truth_rd_30 <= ci_tglm_30[2], "Yes", "No"),
-    if_else(truth_rd_30 >= ci_tsl_30[1] & truth_rd_30 <= ci_tsl_30[2], "Yes", "No")
+    if_else(truth_rd_30 >= ci_lowers_30[7] & truth_rd_30 <= ci_uppers_30[7], "Yes", "No"),
+    if_else(truth_rd_30 >= ci_lowers_30[8] & truth_rd_30 <= ci_uppers_30[8], "Yes", "No"),
+    if_else(truth_rd_30 >= ci_lowers_30[9] & truth_rd_30 <= ci_uppers_30[9], "Yes", "No")
   )
 )
 

@@ -186,6 +186,23 @@ bart_cri_lower <- bart_res$results$cri_lower[30]
 bart_cri_upper <- bart_res$results$cri_upper[30]
 bart_width_30 <- bart_res$results$cri_width[30]
 
+# 7. TMLE + BART (Targeted Survival-BART with Longitudinal IPTW Targeting)
+set.seed(42)
+bart_tmle_res <- fit_bart_tmle(
+  data = df_std,
+  clones = clones,
+  covars = c("x1", "x2"),
+  grace_period = 10,
+  tau = 30,
+  ntree = 50,
+  ndpost = 200,
+  nskip = 100,
+  mc.cores = 2,
+  seed = 42
+)
+bart_tmle_rd_30 <- bart_tmle_res$results$rd[30]
+bart_tmle_se_30 <- bart_tmle_res$results$se_RD[30]
+
 # 8. TTE-TMLE with SuperLearner Ensemble (GLM + Earth + Ranger)
 set.seed(42)
 fit_sl <- tte_tmle(
@@ -215,16 +232,17 @@ estimators <- c(
   "ccw-cphm (Weighted Cox PH)",
   "ccw-km (Weighted KM)",
   "Pure G-Computation (Survival-BART)",
+  "TMLE + BART (Targeted Survival-BART)",
   "TTE-TMLE (Parametric GLM)",
   "TTE-TMLE (SuperLearner Ensemble)"
 )
 
-estimates <- c(naive_rd_30, lm_rd_30, td_rd_30, cphm_rd_30, ccw_km_rd_30, bart_rd_30, tmle_glm_rd_30, tmle_sl_rd_30)
-ses <- c(naive_se_30, lm_se_30, td_se_30, cphm_se_30, ccw_km_se_30, bart_se_30, tmle_glm_se_30, tmle_sl_se_30)
+estimates <- c(naive_rd_30, lm_rd_30, td_rd_30, cphm_rd_30, ccw_km_rd_30, bart_rd_30, bart_tmle_rd_30, tmle_glm_rd_30, tmle_sl_rd_30)
+ses <- c(naive_se_30, lm_se_30, td_se_30, cphm_se_30, ccw_km_se_30, bart_se_30, bart_tmle_se_30, tmle_glm_se_30, tmle_sl_se_30)
 
 ci_lowers <- estimates - 1.96 * ses
 ci_uppers <- estimates + 1.96 * ses
-# Replace BART bounds with posterior draws
+# Replace Pure BART bounds with posterior draws
 ci_lowers[6] <- bart_cri_lower
 ci_uppers[6] <- bart_cri_upper
 
@@ -245,7 +263,7 @@ results_df <- tibble(
   `95% Interval Width` = c(
     as.character(round(ci_uppers[1:5] - ci_lowers[1:5], 4)),
     paste0(round(bart_width_30, 4), "*"),
-    as.character(round(ci_uppers[7:8] - ci_lowers[7:8], 4))
+    as.character(round(ci_uppers[7:9] - ci_lowers[7:9], 4))
   ),
   `Z-Statistic` = z_stats,
   `p-value` = p_vals,
@@ -259,7 +277,8 @@ results_df <- tibble(
     if_else(truth_rd_30 >= ci_lowers[5] & truth_rd_30 <= ci_uppers[5], "Yes", "No"),
     if_else(truth_rd_30 >= bart_cri_lower & truth_rd_30 <= bart_cri_upper, "Yes*", "No*"),
     if_else(truth_rd_30 >= ci_lowers[7] & truth_rd_30 <= ci_uppers[7], "Yes", "No"),
-    if_else(truth_rd_30 >= ci_lowers[8] & truth_rd_30 <= ci_uppers[8], "Yes", "No")
+    if_else(truth_rd_30 >= ci_lowers[8] & truth_rd_30 <= ci_uppers[8], "Yes", "No"),
+    if_else(truth_rd_30 >= ci_lowers[9] & truth_rd_30 <= ci_uppers[9], "Yes", "No")
   )
 )
 

@@ -14,9 +14,9 @@
 #' @param coef_w1 Confounder 1 effect on baseline hazard (default 0.5).
 #' @param coef_w2 Confounder 2 effect on baseline hazard (default 0.4).
 #' @param hr_target True hazard ratio benefit of treatment (default 0.40).
-#' @param p_tx_intercept Intercept for treatment propensity (default -1.6, inducing positivity strain).
-#' @param p_tx_coef1 Coefficient for x1 in propensity model (default 1.2).
-#' @param p_tx_coef2 Coefficient for x2 in propensity model (default 1.0).
+#' @param p_tx_intercept Intercept for treatment propensity (default -1.8, inducing severe positivity strain).
+#' @param p_tx_coef1 Coefficient for x1 in propensity model (default 1.3).
+#' @param p_tx_coef2 Coefficient for x2 in propensity model (default 1.1).
 #' @param seed Optional random seed.
 #'
 #' @return A tibble with standardized observational columns:
@@ -41,9 +41,9 @@ generate_scenario5_data <- function(n = 1000,
                                     coef_w1 = 0.5,
                                     coef_w2 = 0.4,
                                     hr_target = 0.40,
-                                    p_tx_intercept = -1.6,
-                                    p_tx_coef1 = 1.2,
-                                    p_tx_coef2 = 1.0,
+                                    p_tx_intercept = -1.8,
+                                    p_tx_coef1 = 1.3,
+                                    p_tx_coef2 = 1.1,
                                     seed = NULL) {
   
   if (!is.null(seed)) set.seed(seed)

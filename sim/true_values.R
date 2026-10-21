@@ -360,7 +360,7 @@ compute_scenario3_truth <- function(n_oracle = 100000,
 #' @param shape Weibull shape parameter (default 1.5).
 #' @param base_scale Baseline scale parameter (default 45).
 #' @param coef_w Confounder effect on baseline hazard (default 0.4).
-#' @param coef_prog Prognostic biomarker effect on baseline hazard (default 0.9).
+#' @param coef_prog Prognostic biomarker effect on baseline hazard (default 1.4).
 #' @param hr_target Base treatment effect hazard ratio (default 0.35).
 #' @param seed Random seed for reproducibility.
 #'
@@ -372,7 +372,7 @@ compute_scenario4_truth <- function(n_oracle = 100000,
                                     shape = 1.5,
                                     base_scale = 45,
                                     coef_w = 0.4,
-                                    coef_prog = 0.9,
+                                    coef_prog = 1.4,
                                     hr_target = 0.35,
                                     seed = 99999) {
   

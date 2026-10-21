@@ -11,7 +11,7 @@
 #' @param shape Weibull shape parameter (default 1.5).
 #' @param base_scale Baseline scale parameter (default 45).
 #' @param coef_w Confounder effect on baseline hazard (default 0.4).
-#' @param coef_prog Prognostic biomarker effect on baseline hazard (default 0.9, HR ~ 3.3).
+#' @param coef_prog Prognostic biomarker effect on baseline hazard (default 1.4, HR ~ 4.5).
 #' @param hr_target True hazard ratio benefit of treatment (default 0.35).
 #' @param p_tx_intercept Intercept for treatment propensity logistic model (default 0.0).
 #' @param p_tx_coef Coefficient for confounder in treatment propensity model (default 0.6).
@@ -37,7 +37,7 @@ generate_scenario4_data <- function(n = 1000,
                                     shape = 1.5,
                                     base_scale = 45,
                                     coef_w = 0.4,
-                                    coef_prog = 0.9,
+                                    coef_prog = 1.4,
                                     hr_target = 0.35,
                                     p_tx_intercept = 0.0,
                                     p_tx_coef = 0.6,
