@@ -18,9 +18,30 @@ execute:
 
 ## 1. Introduction & Scientific Setting
 
-In observational time-to-event research, treatments are rarely administered instantly at baseline. In clinical practice, treatments are often initiated across a **grace period** (e.g., initiating surgery within 6 months, or initiating a medication within 10 days of diagnosis).
+### 1.1 Clinical & Public Health Motivation
+Consider a hospitalized observational cohort of patients presenting with acute respiratory distress from severe viral infection (e.g., COVID-19 or influenza):
+- **Clinical Dilemma:** In clinical practice, an immunomodulatory or antiviral therapy (e.g., Dexamethasone, Remdesivir, or anti-IL-6) is rarely administered instantly upon hospital presentation ($t = 0$). Instead, clinicians evaluate clinical trajectories and initiate treatment dynamically within a **10-day grace period** ($t \in [1, 10]$).
+- **Target Trial Protocol:** A pragmatic trial emulated from this cohort compares:
+  - **Arm 1 (Treated Strategy):** Initiate therapy within the 10-day grace period upon presentation.
+  - **Arm 0 (Control Strategy):** Standard of care alone (never initiate targeted therapy across the 30-day horizon).
+- **Immortal Time Bias (ITB):** A patient who initiates medication on Day 8 must survive event-free for 8 days to receive treatment. Naive observational analyses (comparing "ever treated" vs. "never treated") credit these 8 pre-treatment event-free days to the drug, introducing severe immortal time bias.
+- **Confounding by Indication:** Patients with severe baseline organ dysfunction (confounder $W$) are both more likely to receive targeted therapy and more likely to experience 30-day mortality.
 
-When researchers evaluate such treatments naively by comparing anyone who "ever took treatment" versus "never took treatment," they commit **Immortal Time Bias (ITB)**. Patients who take treatment on Day 7 were required to survive until Day 7 to receive it; crediting those 7 days of survival to the drug artificially inflates its benefit.
+### 1.2 Data-Generating Process (DGP) Parameters
+Scenario 1 reflects a clean structural baseline where parametric proportional hazards and log-linear propensity models hold:
+
+| Parameter | Symbol / Formula | Value | Interpretation |
+| :--- | :--- | :--- | :--- |
+| **Sample Size** | $N$ | `1,000` | Number of independent patient units in cohort |
+| **Time Horizon** | $\tau$ | `30` | 30-day follow-up duration (discrete daily intervals) |
+| **Grace Period** | $\text{grace}$ | `10` | Allowable window for treatment initiation in treated arm |
+| **Baseline Confounder** | $W \sim \mathcal{N}(0, 1)$ | Standard Normal | Baseline clinical severity score / respiratory frailty |
+| **Propensity Model** | $\text{logit}\, P(A=1 \mid W) = \beta_0 + \beta_1 W$ | $\beta_0 = 0.0, \beta_1 = 0.6$ | Moderate confounding by indication ($OR \approx 1.82$ per SD increase) |
+| **Initiation Timing** | $T_{\text{switch}} \mid A=1 \sim \text{Unif}[1, \text{grace}]$ | $U[1, 10]$ | Compliers initiate therapy uniformly across the grace period |
+| **Baseline Hazard** | Weibull: $h_0(t) = \frac{\gamma}{\lambda} (t / \lambda)^{\gamma - 1}$ | Shape $\gamma = 1.5$, Scale $\lambda = 40$ | Monotonically increasing baseline hazard over time |
+| **Confounder Effect** | $\beta_W$ on Hazard | $0.50$ | Hazard ratio $HR = \exp(0.50) \approx 1.65$ per SD increase in frailty |
+| **Causal Treatment Benefit** | $HR_{\text{tx}}$ | $0.35$ | $65\%$ reduction in instantaneous hazard starting at $T_{\text{switch}}$ |
+| **Oracle Ground Truth** | $RD(30) = S_1(30) - S_0(30)$ | `0.2338` | Counterfactual Risk Difference at Day 30 ($N_{\text{oracle}} = 100,000$) |
 
 This single-iteration walkthrough walks step-by-step through **TTE-TMLE** (*Target Trial Emulation via Time-to-Event Targeted Minimum Loss-Based Estimation*), showing how it mathematically un-biases the observational data, absorbs prognostic variation, and calculates simultaneous confidence bands.
 

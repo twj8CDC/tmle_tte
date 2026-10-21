@@ -43,7 +43,7 @@ compute_ipcw_weights <- function(clones,
   }
   
   if (use_sl) {
-    if (!requireNamespace("SuperLearner", quietly = TRUE)) {
+    if (!require("SuperLearner", quietly = TRUE)) {
       stop("Package 'SuperLearner' is required when use_sl = TRUE.")
     }
     register_sl_earth_int()

@@ -34,7 +34,7 @@ fit_q_models <- function(panel_w,
   panel_treat <- panel_w %>% dplyr::filter(arm == "treat_tx")
   
   if (use_sl) {
-    if (!requireNamespace("SuperLearner", quietly = TRUE)) {
+    if (!require("SuperLearner", quietly = TRUE)) {
       stop("Package 'SuperLearner' is required when use_sl = TRUE.")
     }
     register_sl_earth_int()
