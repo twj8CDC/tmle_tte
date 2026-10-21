@@ -17,3 +17,6 @@ __pycache__/
 *.tar.gz
 *.html
 ~$*
+*.log
+sim/checkpoints_*/
+
