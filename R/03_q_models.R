@@ -24,7 +24,7 @@ fit_q_models <- function(panel_w,
                          covars = c("x1"),
                          q_form = NULL,
                          use_sl = FALSE,
-                         sl_lib = c("SL.mean", "SL.glm", "SL.earth.int", "SL.ranger")) {
+                         sl_lib = c("SL.mean", "SL.glm", "SL.glm.time.int", "SL.earth.int", "SL.ranger")) {
   
   if (is.null(q_form)) {
     q_form <- paste(covars, collapse = " + ")

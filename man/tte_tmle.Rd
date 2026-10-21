@@ -13,7 +13,7 @@ tte_tmle(
   q_form = NULL,
   dt = 1,
   use_sl = FALSE,
-  sl_lib = c("SL.mean", "SL.glm", "SL.earth.int", "SL.ranger"),
+  sl_lib = c("SL.mean", "SL.glm", "SL.glm.time.int", "SL.earth.int", "SL.ranger"),
   trim_quantile = c(0.01, 0.99),
   n_boot = 10000,
   alpha = 0.05,
@@ -44,7 +44,7 @@ individual ID, observed event time, event indicator, treatment indicator, and tr
 
 \item{use_sl}{Logical indicating whether to use \code{SuperLearner} for nuisance models.}
 
-\item{sl_lib}{Character vector of SuperLearner learners (default \code{c("SL.mean", "SL.glm", "SL.earth.int", "SL.ranger")}).}
+\item{sl_lib}{Character vector of SuperLearner learners (default \code{c("SL.mean", "SL.glm", "SL.glm.time.int", "SL.earth.int", "SL.ranger")}).}
 
 \item{trim_quantile}{Numeric vector of length 2 specifying quantiles for IPCW trimming (default \code{c(0.01, 0.99)}).}
 

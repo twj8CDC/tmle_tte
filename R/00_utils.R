@@ -52,12 +52,63 @@ prepare_tte_data <- function(data,
   return(df)
 }
 
-# Ensure SL.earth.int exists for 2-way interaction MARS
+#' SuperLearner wrapper for Earth (MARS) with 2-way interactions
+#'
+#' @param ... Arguments passed to SuperLearner::SL.earth
+#' @param degree Interaction degree (default 2)
+#' @export
+SL.earth.int <- function(..., degree = 2) {
+  SuperLearner::SL.earth(..., degree = degree)
+}
+
+#' SuperLearner wrapper for GLM with Natural Spline Time-by-Treatment Interactions
+#'
+#' @description Fits a discrete-time hazard model with a flexible natural cubic spline
+#'   basis for time interacted with treatment indicator (\code{is_treated}). This allows the
+#'   hazard trajectory and treatment effect to vary smoothly and nonparametrically across follow-up
+#'   without requiring a priori prespecification of waning periods or change-points.
+#'
+#' @param Y Outcome vector.
+#' @param X Predictor matrix or data frame.
+#' @param newX New predictor data for prediction.
+#' @param family Error distribution and link function.
+#' @param obsWeights Observation weights.
+#' @param id Cluster ID.
+#' @param df_ns Degrees of freedom for natural splines (default 4).
+#' @param ... Additional arguments.
+#' @export
+SL.glm.time.int <- function(Y, X, newX, family, obsWeights, id, df_ns = 4, ...) {
+  if (all(c("t", "is_treated") %in% names(X))) {
+    if (length(unique(X$is_treated)) > 1) {
+      cov_vars <- setdiff(names(X), c("t", "t_sq", "is_treated", "post_grace"))
+      cov_term <- if (length(cov_vars) > 0) paste(cov_vars, collapse = " + ") else "1"
+      form_str <- paste0("Y ~ ", cov_term, " + splines::ns(t, df = ", df_ns, ") * is_treated")
+    } else {
+      cov_vars <- setdiff(names(X), c("t", "t_sq", "is_treated", "post_grace"))
+      cov_term <- if (length(cov_vars) > 0) paste(cov_vars, collapse = " + ") else "1"
+      form_str <- paste0("Y ~ ", cov_term, " + splines::ns(t, df = ", df_ns, ")")
+    }
+  } else if ("t" %in% names(X)) {
+    cov_vars <- setdiff(names(X), c("t", "t_sq", "post_grace"))
+    cov_term <- if (length(cov_vars) > 0) paste(cov_vars, collapse = " + ") else "1"
+    form_str <- paste0("Y ~ ", cov_term, " + splines::ns(t, df = ", df_ns, ")")
+  } else {
+    form_str <- "Y ~ ."
+  }
+  fit.glm <- stats::glm(stats::as.formula(form_str), data = X, family = family, weights = obsWeights)
+  pred <- stats::predict(fit.glm, newdata = newX, type = "response")
+  fit <- list(object = fit.glm)
+  class(fit) <- "SL.glm"
+  return(list(pred = pred, fit = fit))
+}
+
+# Ensure SL.earth.int and SL.glm.time.int exist in global environment for SuperLearner workers
 register_sl_earth_int <- function() {
   if (!exists("SL.earth.int", mode = "function", envir = .GlobalEnv)) {
-    assign("SL.earth.int", function(..., degree = 2) {
-      SuperLearner::SL.earth(..., degree = degree)
-    }, envir = .GlobalEnv)
+    assign("SL.earth.int", SL.earth.int, envir = .GlobalEnv)
+  }
+  if (!exists("SL.glm.time.int", mode = "function", envir = .GlobalEnv)) {
+    assign("SL.glm.time.int", SL.glm.time.int, envir = .GlobalEnv)
   }
 }
 

@@ -118,21 +118,45 @@ ggplot(df_plot, aes(x = w1, y = prob_true, color = factor(w2))) +
 A naive analysis comparing anyone who ever initiated treatment vs. never initiated treatment displays severe Immortal Time Bias:
 
 ```{r plot-naive}
-#| fig-width: 8
+#| fig-width: 8.5
 #| fig-height: 4.5
-#| code-summary: "Plot Naive unadjusted Kaplan-Meier survival curves"
+#| code-summary: "Plot Naive unadjusted Kaplan-Meier survival curves using ggplot2 step functions"
 km_naive <- survfit(Surv(event_time, event) ~ tx_obs, data = df)
+df_km <- tibble::tibble(
+  t = km_naive$time,
+  surv = km_naive$surv,
+  strata = rep(names(km_naive$strata), km_naive$strata)
+) %>%
+  mutate(arm = if_else(grepl("1", strata), "Naive Treated (Observed)", "Naive Control (Observed)"))
 
-plot(km_naive, col = c("red", "blue"), lwd = 2,
-     xlab = "Time (Days)", ylab = "Survival Probability",
-     main = "Naive Observational Kaplan-Meier (Suffering from ITB)")
-lines(truth$t, truth$S1_true, col = "blue", lty = 2, lwd = 1.5)
-lines(truth$t, truth$S0_true, col = "red", lty = 2, lwd = 1.5)
-legend("bottomleft", 
-       legend = c("Naive Treated (Observed)", "Naive Control (Observed)", 
-                  "True Treated Target S1", "True Control Target S0"),
-       col = c("blue", "red", "blue", "red"), lty = c(1, 1, 2, 2), lwd = 2)
-grid()
+df_km0 <- tibble::tibble(
+  t = rep(0, 2),
+  surv = rep(1.0, 2),
+  strata = c("tx_obs=0", "tx_obs=1"),
+  arm = c("Naive Control (Observed)", "Naive Treated (Observed)")
+)
+df_km_full <- bind_rows(df_km0, df_km)
+
+df_truth_km <- tibble::tibble(
+  t = c(0, truth$t, 0, truth$t),
+  surv = c(1.0, truth$S1_true, 1.0, truth$S0_true),
+  arm = c(rep("True Treated Target S1", length(truth$t) + 1), rep("True Control Target S0", length(truth$t) + 1))
+)
+
+ggplot() +
+  geom_step(data = df_km_full, aes(x = t, y = surv, color = arm, linetype = arm), direction = "hv", linewidth = 1.1) +
+  geom_step(data = df_truth_km, aes(x = t, y = surv, color = arm, linetype = arm), direction = "hv", linewidth = 1.0) +
+  scale_color_manual(values = c("Naive Treated (Observed)" = "#1f77b4", "Naive Control (Observed)" = "#d62728",
+                                "True Treated Target S1" = "#084594", "True Control Target S0" = "#99000d")) +
+  scale_linetype_manual(values = c("Naive Treated (Observed)" = "solid", "Naive Control (Observed)" = "solid",
+                                  "True Treated Target S1" = "dashed", "True Control Target S0" = "dashed")) +
+  scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.2)) +
+  scale_x_continuous(breaks = seq(0, 30, 5)) +
+  labs(title = "Naive Observational Kaplan-Meier (Suffering from ITB)",
+       subtitle = "Discrete step functions | Naive treated falsely stays near 1.0 during early days",
+       x = "Follow-up Day", y = "Survival Probability", color = "Trajectory", linetype = "Trajectory") +
+  theme_minimal(base_size = 11) +
+  theme(legend.position = "bottom", panel.grid.minor = element_blank())
 ```
 
 Notice how naive treated survival falsely stays near 1.0 during the early days due to required survival until treatment initiation.
@@ -275,10 +299,14 @@ Let's inspect the final debiased causal Risk Difference curve with 95% pointwise
 ```{r plot-bands}
 #| fig-width: 8.5
 #| fig-height: 5
-#| code-summary: "Plot TTE-TMLE Risk Difference curve with simultaneous confidence bands"
-plot(fit_sl, which = "rd")
-lines(truth$t, truth$rd_true, col = "red", lty = 2, lwd = 2)
-legend("topleft", legend = c("Oracle Ground Truth"), col = "red", lty = 2, lwd = 2)
+#| code-summary: "Plot TTE-TMLE Risk Difference curve with simultaneous confidence bands using ggplot2"
+p_sl <- plot(fit_sl, which = "rd")
+df_truth_rd <- data.frame(t = c(0, truth$t), rd = c(0, truth$rd_true))
+
+p_sl + 
+  geom_step(data = df_truth_rd, aes(x = t, y = rd, color = "Oracle Ground Truth"), 
+            direction = "hv", linetype = "dashed", linewidth = 1.1) +
+  scale_color_manual(name = "", values = c("Risk Difference (TMLE)" = "#2ca02c", "Oracle Ground Truth" = "#d62728"))
 ```
 
 The true causal Risk Difference trajectory (red dashed line) stays comfortably within the 95% simultaneous confidence band across all 30 days of follow-up.

@@ -4,8 +4,26 @@
 \alias{plot.tte_tmle}
 \title{Plot method for tte_tmle}
 \usage{
-\method{plot}{tte_tmle}(x, which = c("survival", "rd", "hr"), ...)
+\method{plot}{tte_tmle}(x, which = c("survival", "rd", "hr"), use_ggplot = TRUE, step = TRUE, ...)
+}
+\arguments{
+\item{x}{An object of class \code{"tte_tmle"}.}
+
+\item{which}{Plot type: \code{"survival"}, \code{"rd"} (risk difference), or \code{"hr"} (hazard ratio).}
+
+\item{use_ggplot}{Logical. If \code{TRUE} (default), renders a publication-ready \code{ggplot2} step plot.
+If \code{FALSE}, renders a base R graphic.}
+
+\item{step}{Logical. If \code{TRUE} (default), renders step functions matching discrete time intervals.
+If \code{FALSE}, renders continuous linear interpolation.}
+
+\item{...}{Additional arguments passed to base \code{plot} or \code{matplot} when \code{use_ggplot = FALSE}.}
+}
+\value{
+A \code{ggplot} object if \code{use_ggplot = TRUE}, or invisible \code{NULL} if base R plotting is used.
 }
 \description{
-Plot method for tte_tmle
+Produces discrete-time step visualizations for survival curves,
+marginal risk differences with simultaneous confidence bands, or cumulative hazard ratios.
+Defaults to modern \code{ggplot2} step plots, with fallback to base R graphics.
 }

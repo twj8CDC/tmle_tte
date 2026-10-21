@@ -9,7 +9,7 @@ fit_q_models(
   covars = c("x1"),
   q_form = NULL,
   use_sl = FALSE,
-  sl_lib = c("SL.mean", "SL.glm", "SL.earth.int", "SL.ranger")
+  sl_lib = c("SL.mean", "SL.glm", "SL.glm.time.int", "SL.earth.int", "SL.ranger")
 )
 }
 \arguments{

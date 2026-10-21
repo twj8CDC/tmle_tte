@@ -13,7 +13,7 @@ run_ccw_tmle_analysis(
   q_form = NULL,
   dt = 1,
   use_sl = FALSE,
-  sl_lib = c("SL.mean", "SL.glm", "SL.earth.int", "SL.ranger"),
+  sl_lib = c("SL.mean", "SL.glm", "SL.glm.time.int", "SL.earth.int", "SL.ranger"),
   trim_quantile = c(0.01, 0.99),
   n_boot = 10000,
   alpha = 0.05,

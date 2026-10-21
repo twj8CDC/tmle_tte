@@ -15,7 +15,7 @@
 #' @param q_form Optional formula string for outcome hazard models.
 #' @param dt Discrete time interval step size (default 1).
 #' @param use_sl Logical indicating whether to use \code{SuperLearner} for nuisance models.
-#' @param sl_lib Character vector of SuperLearner learners (default \code{c("SL.mean", "SL.glm", "SL.earth.int", "SL.ranger")}).
+#' @param sl_lib Character vector of SuperLearner learners (default \code{c("SL.mean", "SL.glm", "SL.glm.time.int", "SL.earth.int", "SL.ranger")}).
 #' @param trim_quantile Numeric vector of length 2 specifying quantiles for IPCW trimming (default \code{c(0.01, 0.99)}).
 #' @param n_boot Number of multiplier bootstrap iterations for simultaneous confidence bands (default 10,000).
 #' @param alpha Significance level for intervals and bands (default 0.05).
@@ -48,7 +48,7 @@ tte_tmle <- function(data,
                      q_form = NULL,
                      dt = 1,
                      use_sl = FALSE,
-                     sl_lib = c("SL.mean", "SL.glm", "SL.earth.int", "SL.ranger"),
+                     sl_lib = c("SL.mean", "SL.glm", "SL.glm.time.int", "SL.earth.int", "SL.ranger"),
                      trim_quantile = c(0.01, 0.99),
                      n_boot = 10000,
                      alpha = 0.05,
@@ -237,14 +237,27 @@ print.tte_tmle <- function(x, ...) {
 }
 
 #' Plot method for tte_tmle
+#'
+#' @description Produces discrete-time step visualizations for survival curves,
+#'   marginal risk differences with simultaneous confidence bands, or cumulative hazard ratios.
+#'   Defaults to modern \code{ggplot2} step plots, with fallback to base R graphics.
+#'
 #' @param x An object of class \code{"tte_tmle"}.
 #' @param which Plot type: \code{"survival"}, \code{"rd"} (risk difference), or \code{"hr"} (hazard ratio).
+#' @param use_ggplot Logical. If \code{TRUE} (default), renders a publication-ready \code{ggplot2} step plot.
+#'   If \code{FALSE}, renders a base R graphic.
 #' @param step Logical. If \code{TRUE} (default), renders step functions matching discrete time intervals.
 #'   If \code{FALSE}, renders continuous linear interpolation.
-#' @param ... Additional arguments passed to \code{plot} or \code{matplot}.
+#' @param ... Additional arguments passed to base \code{plot} or \code{matplot} when \code{use_ggplot = FALSE}.
+#' @return A \code{ggplot} object if \code{use_ggplot = TRUE}, or invisible \code{NULL} if base R plotting is used.
 #' @export
-plot.tte_tmle <- function(x, which = c("survival", "rd", "hr"), step = TRUE, ...) {
+plot.tte_tmle <- function(x, which = c("survival", "rd", "hr"), use_ggplot = TRUE, step = TRUE, ...) {
   which <- match.arg(which)
+  
+  if (use_ggplot && requireNamespace("ggplot2", quietly = TRUE)) {
+    return(plot_tte_tmle_ggplot(x, which = which, step = step))
+  }
+  
   plot_type <- if (step) "s" else "l"
   
   if (which == "survival") {
@@ -285,5 +298,168 @@ plot.tte_tmle <- function(x, which = c("survival", "rd", "hr"), step = TRUE, ...
     legend("topright", legend = c("Cumulative HR", "95% Pointwise CI", "95% Simultaneous Band", "Null HR = 1"),
            col = c("darkgreen", "darkgray", "black", "red"), lty = c(1, 2, 3, 2), lwd = c(2, 1, 1.5, 1))
     grid()
+  }
+}
+
+#' Autoplot method for tte_tmle
+#'
+#' @description Produces a \code{ggplot2} step visualization for \code{tte_tmle} objects.
+#'
+#' @param object An object of class \code{"tte_tmle"}.
+#' @param which Plot type: \code{"survival"}, \code{"rd"}, or \code{"hr"}.
+#' @param step Logical. If \code{TRUE} (default), renders step functions matching discrete time intervals.
+#' @param ... Additional arguments (currently unused).
+#' @return A \code{ggplot} object.
+#' @importFrom ggplot2 autoplot
+#' @exportS3Method ggplot2::autoplot
+autoplot.tte_tmle <- function(object, which = c("survival", "rd", "hr"), step = TRUE, ...) {
+  which <- match.arg(which)
+  plot_tte_tmle_ggplot(object, which = which, step = step)
+}
+
+#' Plot TTE-TMLE Results using ggplot2
+#'
+#' @description Generates publication-ready ggplot2 step visualizations for survival curves,
+#'   marginal risk differences with simultaneous confidence bands, or cumulative hazard ratios.
+#'
+#' @param x An object of class \code{"tte_tmle"}.
+#' @param which Character string specifying the plot type: \code{"survival"}, \code{"rd"}, or \code{"hr"}.
+#' @param step Logical. If \code{TRUE} (default), uses native \code{geom_step()} for discrete-time steps.
+#'   If \code{FALSE}, uses \code{geom_line()} for linear interpolation.
+#'
+#' @return A \code{ggplot} object.
+#' @export
+plot_tte_tmle_ggplot <- function(x, which = c("survival", "rd", "hr"), step = TRUE) {
+  which <- match.arg(which)
+  res <- x$res_tmle
+  gp <- x$params$grace_period
+  tau <- x$params$tau
+  step_dir <- "hv"
+  
+  if (which == "survival") {
+    df0 <- data.frame(t = 0, treat_tx = 1.0, control_no_tx = 1.0)
+    df <- rbind(df0, as.data.frame(res[, c("t", "treat_tx", "control_no_tx")]))
+    df_long <- tidyr::pivot_longer(df, cols = c("treat_tx", "control_no_tx"),
+                                   names_to = "arm", values_to = "surv")
+    df_long$arm <- factor(df_long$arm,
+                          levels = c("treat_tx", "control_no_tx"),
+                          labels = c("Treatment (Initiate <= Grace)", "Control (Never Treat)"))
+    
+    p <- ggplot2::ggplot(df_long, ggplot2::aes(x = t, y = surv, color = arm, linetype = arm))
+    if (step) {
+      p <- p + ggplot2::geom_step(direction = step_dir, linewidth = 1)
+    } else {
+      p <- p + ggplot2::geom_line(linewidth = 1)
+    }
+    p <- p +
+      ggplot2::geom_vline(xintercept = gp, linetype = "dashed", color = "gray50", alpha = 0.7) +
+      ggplot2::scale_color_manual(values = c("Treatment (Initiate <= Grace)" = "#1f77b4", "Control (Never Treat)" = "#d62728")) +
+      ggplot2::scale_linetype_manual(values = c("Treatment (Initiate <= Grace)" = "solid", "Control (Never Treat)" = "dashed")) +
+      ggplot2::scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.2)) +
+      ggplot2::scale_x_continuous(breaks = seq(0, tau, by = if (tau <= 30) 5 else 10)) +
+      ggplot2::labs(
+        title = "TTE-TMLE Marginal Counterfactual Survival Curves",
+        subtitle = paste0("Protocol Grace Period = ", gp, " days | Discrete-time step functions"),
+        x = "Follow-up Time (days)",
+        y = "Marginal Survival Probability S(t)",
+        color = "Regime",
+        linetype = "Regime"
+      ) +
+      ggplot2::theme_minimal(base_size = 12) +
+      ggplot2::theme(
+        legend.position = "bottom",
+        panel.grid.minor = ggplot2::element_blank()
+      )
+    return(p)
+    
+  } else if (which == "rd") {
+    df0 <- data.frame(t = 0, rd = 0, rd_ci_lower = 0, rd_ci_upper = 0,
+                      rd_band_lower = 0, rd_band_upper = 0)
+    cols <- c("t", "rd", "rd_ci_lower", "rd_ci_upper", "rd_band_lower", "rd_band_upper")
+    df <- rbind(df0, as.data.frame(res[, cols]))
+    
+    p <- ggplot2::ggplot(df, ggplot2::aes(x = t)) +
+      ggplot2::geom_hline(yintercept = 0, linetype = "dashed", color = "firebrick", alpha = 0.8) +
+      ggplot2::geom_vline(xintercept = gp, linetype = "dotted", color = "gray50", alpha = 0.8)
+    
+    if (step) {
+      p <- p +
+        ggplot2::geom_step(ggplot2::aes(y = rd_band_upper, linetype = "95% Simultaneous Band"), direction = step_dir, color = "gray30", linewidth = 0.8) +
+        ggplot2::geom_step(ggplot2::aes(y = rd_band_lower, linetype = "95% Simultaneous Band"), direction = step_dir, color = "gray30", linewidth = 0.8) +
+        ggplot2::geom_step(ggplot2::aes(y = rd_ci_upper, linetype = "95% Pointwise CI"), direction = step_dir, color = "#1f77b4", linewidth = 0.8) +
+        ggplot2::geom_step(ggplot2::aes(y = rd_ci_lower, linetype = "95% Pointwise CI"), direction = step_dir, color = "#1f77b4", linewidth = 0.8) +
+        ggplot2::geom_step(ggplot2::aes(y = rd, color = "Risk Difference (TMLE)"), direction = step_dir, linewidth = 1.2)
+    } else {
+      p <- p +
+        ggplot2::geom_line(ggplot2::aes(y = rd_band_upper, linetype = "95% Simultaneous Band"), color = "gray30", linewidth = 0.8) +
+        ggplot2::geom_line(ggplot2::aes(y = rd_band_lower, linetype = "95% Simultaneous Band"), color = "gray30", linewidth = 0.8) +
+        ggplot2::geom_line(ggplot2::aes(y = rd_ci_upper, linetype = "95% Pointwise CI"), color = "#1f77b4", linewidth = 0.8) +
+        ggplot2::geom_line(ggplot2::aes(y = rd_ci_lower, linetype = "95% Pointwise CI"), color = "#1f77b4", linewidth = 0.8) +
+        ggplot2::geom_line(ggplot2::aes(y = rd, color = "Risk Difference (TMLE)"), linewidth = 1.2)
+    }
+    
+    p <- p +
+      ggplot2::scale_color_manual(name = "", values = c("Risk Difference (TMLE)" = "#2ca02c")) +
+      ggplot2::scale_linetype_manual(name = "Uncertainty Limits",
+                                    values = c("95% Simultaneous Band" = "dotted", "95% Pointwise CI" = "dashed")) +
+      ggplot2::scale_x_continuous(breaks = seq(0, tau, by = if (tau <= 30) 5 else 10)) +
+      ggplot2::labs(
+        title = "TTE-TMLE Marginal Risk Difference & Simultaneous Confidence Bands",
+        subtitle = paste0("Protocol Grace Period = ", gp, " days | Simultaneous multiplier critical value = ", round(x$crit_val_simul, 3)),
+        x = "Follow-up Time (days)",
+        y = "Risk Difference RD(t) = S1(t) - S0(t)"
+      ) +
+      ggplot2::theme_minimal(base_size = 12) +
+      ggplot2::theme(
+        legend.position = "bottom",
+        legend.box = "horizontal",
+        panel.grid.minor = ggplot2::element_blank()
+      )
+    return(p)
+    
+  } else if (which == "hr") {
+    cols <- c("t", "hr_cum", "hr_ci_lower", "hr_ci_upper", "hr_band_lower", "hr_band_upper")
+    df <- as.data.frame(res[, cols])
+    df <- df[is.finite(df$hr_cum) & df$hr_cum > 0, ]
+    
+    p <- ggplot2::ggplot(df, ggplot2::aes(x = t)) +
+      ggplot2::geom_hline(yintercept = 1, linetype = "dashed", color = "firebrick", alpha = 0.8) +
+      ggplot2::geom_vline(xintercept = gp, linetype = "dotted", color = "gray50", alpha = 0.8)
+    
+    if (step) {
+      p <- p +
+        ggplot2::geom_step(ggplot2::aes(y = hr_band_upper, linetype = "95% Simultaneous Band"), direction = step_dir, color = "gray30", linewidth = 0.8) +
+        ggplot2::geom_step(ggplot2::aes(y = hr_band_lower, linetype = "95% Simultaneous Band"), direction = step_dir, color = "gray30", linewidth = 0.8) +
+        ggplot2::geom_step(ggplot2::aes(y = hr_ci_upper, linetype = "95% Pointwise CI"), direction = step_dir, color = "#1f77b4", linewidth = 0.8) +
+        ggplot2::geom_step(ggplot2::aes(y = hr_ci_lower, linetype = "95% Pointwise CI"), direction = step_dir, color = "#1f77b4", linewidth = 0.8) +
+        ggplot2::geom_step(ggplot2::aes(y = hr_cum, color = "Cumulative Hazard Ratio (TMLE)"), direction = step_dir, linewidth = 1.2)
+    } else {
+      p <- p +
+        ggplot2::geom_line(ggplot2::aes(y = hr_band_upper, linetype = "95% Simultaneous Band"), color = "gray30", linewidth = 0.8) +
+        ggplot2::geom_line(ggplot2::aes(y = hr_band_lower, linetype = "95% Simultaneous Band"), color = "gray30", linewidth = 0.8) +
+        ggplot2::geom_line(ggplot2::aes(y = hr_ci_upper, linetype = "95% Pointwise CI"), color = "#1f77b4", linewidth = 0.8) +
+        ggplot2::geom_line(ggplot2::aes(y = hr_ci_lower, linetype = "95% Pointwise CI"), color = "#1f77b4", linewidth = 0.8) +
+        ggplot2::geom_line(ggplot2::aes(y = hr_cum, color = "Cumulative Hazard Ratio (TMLE)"), linewidth = 1.2)
+    }
+    
+    p <- p +
+      ggplot2::scale_y_log10() +
+      ggplot2::scale_color_manual(name = "", values = c("Cumulative Hazard Ratio (TMLE)" = "#2ca02c")) +
+      ggplot2::scale_linetype_manual(name = "Uncertainty Limits",
+                                    values = c("95% Simultaneous Band" = "dotted", "95% Pointwise CI" = "dashed")) +
+      ggplot2::scale_x_continuous(breaks = seq(0, tau, by = if (tau <= 30) 5 else 10)) +
+      ggplot2::labs(
+        title = "TTE-TMLE Cumulative Hazard Ratio & Simultaneous Confidence Bands",
+        subtitle = paste0("Protocol Grace Period = ", gp, " days | Delta-method log-cumulative hazard ratio"),
+        x = "Follow-up Time (days)",
+        y = "Cumulative Hazard Ratio (Log Scale)"
+      ) +
+      ggplot2::theme_minimal(base_size = 12) +
+      ggplot2::theme(
+        legend.position = "bottom",
+        legend.box = "horizontal",
+        panel.grid.minor = ggplot2::element_blank()
+      )
+    return(p)
   }
 }

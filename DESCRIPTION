@@ -20,7 +20,8 @@ Imports:
     survival,
     stats,
     rlang,
-    tibble
+    tibble,
+    ggplot2
 Suggests:
     SuperLearner,
     earth,

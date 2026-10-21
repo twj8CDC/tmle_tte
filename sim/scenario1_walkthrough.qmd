@@ -313,39 +313,66 @@ cat("Pointwise CI Critical Value:     ", round(inf_res$crit_val_pointwise, 3), "
 Let's plot the marginal survival curves and the risk difference corridor against the true oracle benchmark:
 
 ```{r plot-tmle}
-#| code-summary: "Plot marginal survival curves and risk difference with bands"
+#| code-summary: "Plot marginal survival curves and risk difference using discrete ggplot2 step functions"
+# Add t = 0 baseline values for step plotting
 res_plot <- inf_res$res_tmle %>%
   left_join(truth %>% select(t, rd_truth = rd_true, S0_truth = S0_true, S1_truth = S1_true), by = "t")
 
-# Plot 1: Marginal Survival Curves
-ggplot(res_plot, aes(x = t)) +
-  geom_line(aes(y = treat_tx, color = "Treated (TTE-TMLE)"), linewidth = 1.2) +
-  geom_line(aes(y = control_no_tx, color = "Control (TTE-TMLE)"), linewidth = 1.2, linetype = "dashed") +
-  geom_line(aes(y = S1_truth, color = "True S1 (Oracle)"), linetype = "dotted", linewidth = 1) +
-  geom_line(aes(y = S0_truth, color = "True S0 (Oracle)"), linetype = "dotted", linewidth = 1) +
-  scale_color_manual(values = c("Treated (TTE-TMLE)" = "blue", "Control (TTE-TMLE)" = "red",
-                                "True S1 (Oracle)" = "darkblue", "True S0 (Oracle)" = "darkred")) +
+df_plot0 <- tibble::tibble(
+  t = 0,
+  treat_tx = 1.0,
+  control_no_tx = 1.0,
+  S1_truth = 1.0,
+  S0_truth = 1.0,
+  rd = 0.0,
+  rd_truth = 0.0,
+  rd_ci_lower = 0.0,
+  rd_ci_upper = 0.0,
+  rd_band_lower = 0.0,
+  rd_band_upper = 0.0
+)
+
+res_step <- bind_rows(df_plot0, res_plot)
+
+# Plot 1: Marginal Survival Curves (Discrete Step Functions)
+ggplot(res_step, aes(x = t)) +
+  geom_step(aes(y = treat_tx, color = "Treated (TTE-TMLE)"), direction = "hv", linewidth = 1.1) +
+  geom_step(aes(y = control_no_tx, color = "Control (TTE-TMLE)"), direction = "hv", linewidth = 1.1, linetype = "dashed") +
+  geom_step(aes(y = S1_truth, color = "True S1 (Oracle)"), direction = "hv", linetype = "dotted", linewidth = 1) +
+  geom_step(aes(y = S0_truth, color = "True S0 (Oracle)"), direction = "hv", linetype = "dotted", linewidth = 1) +
+  geom_vline(xintercept = 10, linetype = "dashed", color = "gray50", alpha = 0.7) +
+  scale_color_manual(values = c("Treated (TTE-TMLE)" = "#1f77b4", "Control (TTE-TMLE)" = "#d62728",
+                                "True S1 (Oracle)" = "#084594", "True S0 (Oracle)" = "#99000d")) +
+  scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.2)) +
+  scale_x_continuous(breaks = seq(0, 30, 5)) +
   labs(
     title = "TTE-TMLE Marginal Survival Curves vs. Oracle Truth",
+    subtitle = "Discrete step functions (direction = 'hv') | Vertical dashed line = Grace period (Day 10)",
     x = "Follow-up Day", y = "Survival Probability", color = "Arm"
   ) +
-  theme_minimal()
+  theme_minimal(base_size = 11) +
+  theme(legend.position = "bottom", panel.grid.minor = element_blank())
 
-# Plot 2: Risk Difference with Pointwise CIs and Simultaneous Bands
-ggplot(res_plot, aes(x = t)) +
-  geom_ribbon(aes(ymin = rd_band_lower, ymax = rd_band_upper, fill = "95% Simultaneous Band"), alpha = 0.2) +
-  geom_ribbon(aes(ymin = rd_ci_lower, ymax = rd_ci_upper, fill = "95% Pointwise CI"), alpha = 0.3) +
-  geom_line(aes(y = rd, color = "TTE-TMLE Risk Difference"), linewidth = 1.2) +
-  geom_line(aes(y = rd_truth, color = "Oracle Truth"), linetype = "dashed", linewidth = 1.1) +
-  scale_color_manual(values = c("TTE-TMLE Risk Difference" = "purple", "Oracle Truth" = "black")) +
-  scale_fill_manual(values = c("95% Simultaneous Band" = "purple", "95% Pointwise CI" = "blue")) +
+# Plot 2: Risk Difference with Pointwise CIs and Simultaneous Bands (Discrete Step Functions)
+ggplot(res_step, aes(x = t)) +
   geom_hline(yintercept = 0, linetype = "dotted", color = "gray40") +
+  geom_vline(xintercept = 10, linetype = "dashed", color = "gray50", alpha = 0.7) +
+  geom_step(aes(y = rd_band_upper, linetype = "95% Simultaneous Band"), direction = "hv", color = "gray30", linewidth = 0.8) +
+  geom_step(aes(y = rd_band_lower, linetype = "95% Simultaneous Band"), direction = "hv", color = "gray30", linewidth = 0.8) +
+  geom_step(aes(y = rd_ci_upper, linetype = "95% Pointwise CI"), direction = "hv", color = "#1f77b4", linewidth = 0.8) +
+  geom_step(aes(y = rd_ci_lower, linetype = "95% Pointwise CI"), direction = "hv", color = "#1f77b4", linewidth = 0.8) +
+  geom_step(aes(y = rd_truth, color = "Oracle Truth"), direction = "hv", linetype = "dashed", linewidth = 1.1) +
+  geom_step(aes(y = rd, color = "TTE-TMLE Risk Difference"), direction = "hv", linewidth = 1.2) +
+  scale_color_manual(name = "", values = c("TTE-TMLE Risk Difference" = "#7b1fa2", "Oracle Truth" = "#d62728")) +
+  scale_linetype_manual(name = "Uncertainty Limits", values = c("95% Simultaneous Band" = "dotted", "95% Pointwise CI" = "dashed")) +
+  scale_x_continuous(breaks = seq(0, 30, 5)) +
   labs(
-    title = "Marginal Risk Difference (Treat - Control) with Simultaneous Confidence Band",
-    subtitle = "The purple shaded tunnel captures the entire 30-day journey simultaneously",
-    x = "Follow-up Day", y = "Risk Difference", color = "Trajectory", fill = "Inference"
+    title = "Marginal Risk Difference with Simultaneous Confidence Band",
+    subtitle = "Discrete step functions | Multiplier bootstrap simultaneous band (critical value = 2.87)",
+    x = "Follow-up Day", y = "Risk Difference RD(t) = S1(t) - S0(t)"
   ) +
-  theme_minimal()
+  theme_minimal(base_size = 11) +
+  theme(legend.position = "bottom", legend.box = "horizontal", panel.grid.minor = element_blank())
 ```
 
 ---
@@ -356,21 +383,26 @@ Using the Functional Delta Method on the empirical influence curve:
 $$\theta(t) = \frac{\log(S_1(t))}{\log(S_0(t))}$$
 
 ```{r plot-hr}
-#| code-summary: "Plot Cumulative Hazard Ratio trajectory"
+#| code-summary: "Plot Cumulative Hazard Ratio trajectory using ggplot2 step functions"
 ggplot(res_plot, aes(x = t)) +
-  geom_ribbon(aes(ymin = hr_band_lower, ymax = hr_band_upper, fill = "95% Simultaneous Band"), alpha = 0.2) +
-  geom_ribbon(aes(ymin = hr_ci_lower, ymax = hr_ci_upper, fill = "95% Pointwise CI"), alpha = 0.3) +
-  geom_line(aes(y = hr_cum, color = "TTE-TMLE Cumulative HR"), linewidth = 1.2) +
-  geom_hline(yintercept = 1.0, linetype = "dashed", color = "red") +
+  geom_hline(yintercept = 1.0, linetype = "dashed", color = "firebrick") +
+  geom_vline(xintercept = 10, linetype = "dotted", color = "gray50", alpha = 0.7) +
+  geom_step(aes(y = hr_band_upper, linetype = "95% Simultaneous Band"), direction = "hv", color = "gray30", linewidth = 0.8) +
+  geom_step(aes(y = hr_band_lower, linetype = "95% Simultaneous Band"), direction = "hv", color = "gray30", linewidth = 0.8) +
+  geom_step(aes(y = hr_ci_upper, linetype = "95% Pointwise CI"), direction = "hv", color = "#1f77b4", linewidth = 0.8) +
+  geom_step(aes(y = hr_ci_lower, linetype = "95% Pointwise CI"), direction = "hv", color = "#1f77b4", linewidth = 0.8) +
+  geom_step(aes(y = hr_cum, color = "TTE-TMLE Cumulative HR"), direction = "hv", linewidth = 1.2) +
   scale_y_log10() +
-  scale_color_manual(values = c("TTE-TMLE Cumulative HR" = "darkgreen")) +
-  scale_fill_manual(values = c("95% Simultaneous Band" = "darkgreen", "95% Pointwise CI" = "green")) +
+  scale_color_manual(name = "", values = c("TTE-TMLE Cumulative HR" = "#2ca02c")) +
+  scale_linetype_manual(name = "Uncertainty Limits", values = c("95% Simultaneous Band" = "dotted", "95% Pointwise CI" = "dashed")) +
+  scale_x_continuous(breaks = seq(0, 30, 5)) +
   labs(
     title = "TTE-TMLE Cumulative Hazard Ratio & Simultaneous Confidence Band",
-    subtitle = "Derived via the Functional Delta Method on EIC (Log Scale)",
-    x = "Follow-up Day", y = "Cumulative Hazard Ratio (Log Scale)", color = "Estimate", fill = "Inference"
+    subtitle = "Discrete step functions derived via the Functional Delta Method on EIC (Log Scale)",
+    x = "Follow-up Day", y = "Cumulative Hazard Ratio (Log Scale)"
   ) +
-  theme_minimal()
+  theme_minimal(base_size = 11) +
+  theme(legend.position = "bottom", legend.box = "horizontal", panel.grid.minor = element_blank())
 ```
 
 ---
