@@ -347,9 +347,9 @@ plot_tte_tmle_ggplot <- function(x, which = c("survival", "rd", "hr"), step = TR
     
     p <- ggplot2::ggplot(df_long, ggplot2::aes(x = t, y = surv, color = arm, linetype = arm))
     if (step) {
-      p <- p + ggplot2::geom_step(direction = step_dir, linewidth = 1)
+      p <- p + ggplot2::geom_step(direction = step_dir, linewidth = 0.7)
     } else {
-      p <- p + ggplot2::geom_line(linewidth = 1)
+      p <- p + ggplot2::geom_line(linewidth = 0.7)
     }
     p <- p +
       ggplot2::geom_vline(xintercept = gp, linetype = "dashed", color = "gray50", alpha = 0.7) +
@@ -384,18 +384,18 @@ plot_tte_tmle_ggplot <- function(x, which = c("survival", "rd", "hr"), step = TR
     
     if (step) {
       p <- p +
-        ggplot2::geom_step(ggplot2::aes(y = rd_band_upper, linetype = "95% Simultaneous Band"), direction = step_dir, color = "gray30", linewidth = 0.8) +
-        ggplot2::geom_step(ggplot2::aes(y = rd_band_lower, linetype = "95% Simultaneous Band"), direction = step_dir, color = "gray30", linewidth = 0.8) +
-        ggplot2::geom_step(ggplot2::aes(y = rd_ci_upper, linetype = "95% Pointwise CI"), direction = step_dir, color = "#1f77b4", linewidth = 0.8) +
-        ggplot2::geom_step(ggplot2::aes(y = rd_ci_lower, linetype = "95% Pointwise CI"), direction = step_dir, color = "#1f77b4", linewidth = 0.8) +
-        ggplot2::geom_step(ggplot2::aes(y = rd, color = "Risk Difference (TMLE)"), direction = step_dir, linewidth = 1.2)
+        ggplot2::geom_step(ggplot2::aes(y = rd_band_upper, linetype = "95% Simultaneous Band"), direction = step_dir, color = "gray30", linewidth = 0.5) +
+        ggplot2::geom_step(ggplot2::aes(y = rd_band_lower, linetype = "95% Simultaneous Band"), direction = step_dir, color = "gray30", linewidth = 0.5) +
+        ggplot2::geom_step(ggplot2::aes(y = rd_ci_upper, linetype = "95% Pointwise CI"), direction = step_dir, color = "#1f77b4", linewidth = 0.5) +
+        ggplot2::geom_step(ggplot2::aes(y = rd_ci_lower, linetype = "95% Pointwise CI"), direction = step_dir, color = "#1f77b4", linewidth = 0.5) +
+        ggplot2::geom_step(ggplot2::aes(y = rd, color = "Risk Difference (TMLE)"), direction = step_dir, linewidth = 0.7)
     } else {
       p <- p +
-        ggplot2::geom_line(ggplot2::aes(y = rd_band_upper, linetype = "95% Simultaneous Band"), color = "gray30", linewidth = 0.8) +
-        ggplot2::geom_line(ggplot2::aes(y = rd_band_lower, linetype = "95% Simultaneous Band"), color = "gray30", linewidth = 0.8) +
-        ggplot2::geom_line(ggplot2::aes(y = rd_ci_upper, linetype = "95% Pointwise CI"), color = "#1f77b4", linewidth = 0.8) +
-        ggplot2::geom_line(ggplot2::aes(y = rd_ci_lower, linetype = "95% Pointwise CI"), color = "#1f77b4", linewidth = 0.8) +
-        ggplot2::geom_line(ggplot2::aes(y = rd, color = "Risk Difference (TMLE)"), linewidth = 1.2)
+        ggplot2::geom_line(ggplot2::aes(y = rd_band_upper, linetype = "95% Simultaneous Band"), color = "gray30", linewidth = 0.5) +
+        ggplot2::geom_line(ggplot2::aes(y = rd_band_lower, linetype = "95% Simultaneous Band"), color = "gray30", linewidth = 0.5) +
+        ggplot2::geom_line(ggplot2::aes(y = rd_ci_upper, linetype = "95% Pointwise CI"), color = "#1f77b4", linewidth = 0.5) +
+        ggplot2::geom_line(ggplot2::aes(y = rd_ci_lower, linetype = "95% Pointwise CI"), color = "#1f77b4", linewidth = 0.5) +
+        ggplot2::geom_line(ggplot2::aes(y = rd, color = "Risk Difference (TMLE)"), linewidth = 0.7)
     }
     
     p <- p +
@@ -428,18 +428,18 @@ plot_tte_tmle_ggplot <- function(x, which = c("survival", "rd", "hr"), step = TR
     
     if (step) {
       p <- p +
-        ggplot2::geom_step(ggplot2::aes(y = hr_band_upper, linetype = "95% Simultaneous Band"), direction = step_dir, color = "gray30", linewidth = 0.8) +
-        ggplot2::geom_step(ggplot2::aes(y = hr_band_lower, linetype = "95% Simultaneous Band"), direction = step_dir, color = "gray30", linewidth = 0.8) +
-        ggplot2::geom_step(ggplot2::aes(y = hr_ci_upper, linetype = "95% Pointwise CI"), direction = step_dir, color = "#1f77b4", linewidth = 0.8) +
-        ggplot2::geom_step(ggplot2::aes(y = hr_ci_lower, linetype = "95% Pointwise CI"), direction = step_dir, color = "#1f77b4", linewidth = 0.8) +
-        ggplot2::geom_step(ggplot2::aes(y = hr_cum, color = "Cumulative Hazard Ratio (TMLE)"), direction = step_dir, linewidth = 1.2)
+        ggplot2::geom_step(ggplot2::aes(y = hr_band_upper, linetype = "95% Simultaneous Band"), direction = step_dir, color = "gray30", linewidth = 0.5) +
+        ggplot2::geom_step(ggplot2::aes(y = hr_band_lower, linetype = "95% Simultaneous Band"), direction = step_dir, color = "gray30", linewidth = 0.5) +
+        ggplot2::geom_step(ggplot2::aes(y = hr_ci_upper, linetype = "95% Pointwise CI"), direction = step_dir, color = "#1f77b4", linewidth = 0.5) +
+        ggplot2::geom_step(ggplot2::aes(y = hr_ci_lower, linetype = "95% Pointwise CI"), direction = step_dir, color = "#1f77b4", linewidth = 0.5) +
+        ggplot2::geom_step(ggplot2::aes(y = hr_cum, color = "Cumulative Hazard Ratio (TMLE)"), direction = step_dir, linewidth = 0.7)
     } else {
       p <- p +
-        ggplot2::geom_line(ggplot2::aes(y = hr_band_upper, linetype = "95% Simultaneous Band"), color = "gray30", linewidth = 0.8) +
-        ggplot2::geom_line(ggplot2::aes(y = hr_band_lower, linetype = "95% Simultaneous Band"), color = "gray30", linewidth = 0.8) +
-        ggplot2::geom_line(ggplot2::aes(y = hr_ci_upper, linetype = "95% Pointwise CI"), color = "#1f77b4", linewidth = 0.8) +
-        ggplot2::geom_line(ggplot2::aes(y = hr_ci_lower, linetype = "95% Pointwise CI"), color = "#1f77b4", linewidth = 0.8) +
-        ggplot2::geom_line(ggplot2::aes(y = hr_cum, color = "Cumulative Hazard Ratio (TMLE)"), linewidth = 1.2)
+        ggplot2::geom_line(ggplot2::aes(y = hr_band_upper, linetype = "95% Simultaneous Band"), color = "gray30", linewidth = 0.5) +
+        ggplot2::geom_line(ggplot2::aes(y = hr_band_lower, linetype = "95% Simultaneous Band"), color = "gray30", linewidth = 0.5) +
+        ggplot2::geom_line(ggplot2::aes(y = hr_ci_upper, linetype = "95% Pointwise CI"), color = "#1f77b4", linewidth = 0.5) +
+        ggplot2::geom_line(ggplot2::aes(y = hr_ci_lower, linetype = "95% Pointwise CI"), color = "#1f77b4", linewidth = 0.5) +
+        ggplot2::geom_line(ggplot2::aes(y = hr_cum, color = "Cumulative Hazard Ratio (TMLE)"), linewidth = 0.7)
     }
     
     p <- p +

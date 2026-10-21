@@ -83,13 +83,14 @@ marginalize_gcomp <- function(data,
   if (use_sl) {
     X_cf_ctrl <- cf_data %>% dplyr::select(dplyr::all_of(covars), t, t_sq, post_grace) %>% as.data.frame()
     X_cf_treat <- cf_data %>% dplyr::select(dplyr::all_of(covars), t, t_sq, post_grace, is_treated) %>% as.data.frame()
+    X_cf_denom_ctrl <- cf_data %>% dplyr::select(dplyr::all_of(covars), t, t_sq) %>% as.data.frame()
     X_cf_treat_only <- cf_data %>% dplyr::select(dplyr::all_of(covars)) %>% as.data.frame()
     
     cf_pred_Q_ctrl <- stats::predict(m_Q_ctrl, newdata = X_cf_ctrl, onlySL = TRUE)$pred[, 1]
     cf_pred_Q_treat <- stats::predict(m_Q_treat, newdata = X_cf_treat, onlySL = TRUE)$pred[, 1]
     cf_pred_Q_init <- dplyr::if_else(cf_data$arm == "treat_tx", cf_pred_Q_treat, cf_pred_Q_ctrl)
     
-    cf_pred_ctrl_denom <- stats::predict(m_denom_ctrl, newdata = X_cf_treat, onlySL = TRUE)$pred[, 1]
+    cf_pred_ctrl_denom <- stats::predict(m_denom_ctrl, newdata = X_cf_denom_ctrl, onlySL = TRUE)$pred[, 1]
     cf_pred_treat_denom <- stats::predict(m_denom_treat, newdata = X_cf_treat_only, onlySL = TRUE)$pred[, 1]
   } else {
     cf_pred_Q_ctrl <- stats::predict(m_Q_ctrl, newdata = cf_data, type = "response")

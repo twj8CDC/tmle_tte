@@ -144,8 +144,8 @@ df_truth_km <- tibble::tibble(
 )
 
 ggplot() +
-  geom_step(data = df_km_full, aes(x = t, y = surv, color = arm, linetype = arm), direction = "hv", linewidth = 1.1) +
-  geom_step(data = df_truth_km, aes(x = t, y = surv, color = arm, linetype = arm), direction = "hv", linewidth = 1.0) +
+  geom_step(data = df_km_full, aes(x = t, y = surv, color = arm, linetype = arm), direction = "hv", linewidth = 0.7) +
+  geom_step(data = df_truth_km, aes(x = t, y = surv, color = arm, linetype = arm), direction = "hv", linewidth = 0.7) +
   scale_color_manual(values = c("Naive Treated (Observed)" = "#1f77b4", "Naive Control (Observed)" = "#d62728",
                                 "True Treated Target S1" = "#084594", "True Control Target S0" = "#99000d")) +
   scale_linetype_manual(values = c("Naive Treated (Observed)" = "solid", "Naive Control (Observed)" = "solid",
@@ -305,7 +305,7 @@ df_truth_rd <- data.frame(t = c(0, truth$t), rd = c(0, truth$rd_true))
 
 p_sl + 
   geom_step(data = df_truth_rd, aes(x = t, y = rd, color = "Oracle Ground Truth"), 
-            direction = "hv", linetype = "dashed", linewidth = 1.1) +
+            direction = "hv", linetype = "dashed", linewidth = 0.7) +
   scale_color_manual(name = "", values = c("Risk Difference (TMLE)" = "#2ca02c", "Oracle Ground Truth" = "#d62728"))
 ```
 

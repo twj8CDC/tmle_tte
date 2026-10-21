@@ -2,7 +2,9 @@
 
 S3method(ggplot2::autoplot,tte_tmle)
 S3method(plot,tte_tmle)
+S3method(predict,SL.bart)
 S3method(print,tte_tmle)
+export(SL.bart)
 export(SL.earth.int)
 export(SL.glm.time.int)
 export(compute_eic_inference)
