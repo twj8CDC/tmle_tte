@@ -211,3 +211,46 @@ fit_ccw_cphm <- function(panel_w, covars = NULL, tau = 30) {
     se_rd_tau = se_rd_tau
   ))
 }
+
+#' Clone-Censor-Weighted Kaplan-Meier (CCW-KM) with Simultaneous Confidence Bands
+#'
+#' @description Fits weighted Kaplan-Meier curves on the clone-censored person-time panel,
+#'   computing pointwise standard errors, pointwise Wald confidence intervals, and
+#'   simultaneous confidence bands via the Multiplier Bootstrap on its influence curve.
+#'
+#' @param panel_w Longitudinal person-time panel from \code{\link{compute_ipcw_weights}}.
+#' @param tau Follow-up time horizon (default 30).
+#' @param n_boot Multiplier bootstrap replicates (default 5000).
+#' @param alpha Significance level (default 0.05).
+#' @param seed Optional random seed.
+#'
+#' @return A list containing results table with simultaneous bands, RMSTD, marginal total HR, and elapsed runtime.
+#' @export
+fit_ccw_km <- function(panel_w,
+                       tau = 30,
+                       n_boot = 5000,
+                       alpha = 0.05,
+                       seed = NULL) {
+  
+  t_start <- proc.time()["elapsed"]
+  inf <- compute_ccw_km_inference(
+    panel_w = panel_w,
+    tau = tau,
+    n_boot = n_boot,
+    alpha = alpha,
+    seed = seed
+  )
+  t_elapsed <- as.numeric(proc.time()["elapsed"] - t_start)
+  
+  res <- inf$results
+  rmstd <- sum(res$rd[1:tau], na.rm = TRUE)
+  hr_marg <- res$hr_marginal[tau]
+  
+  return(list(
+    results = res,
+    crit_val_simul = inf$crit_val_simul,
+    rmstd_tau = rmstd,
+    hr_marginal_tau = hr_marg,
+    elapsed_sec = t_elapsed
+  ))
+}

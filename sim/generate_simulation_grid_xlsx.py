@@ -274,8 +274,9 @@ def build_excel_grid():
         ("p_val_30", "Scalar", "Numeric", "Two-sided p-value: 2 * (1 - Phi(|Z|)).", "Significance decision against alpha = 0.05."),
         ("reject_H0_30", "Scalar", "Binary (0/1)", "Indicator I(p_val_30 < 0.05).", "Averaged across B iterations to compute Empirical Power & FNR."),
         ("uniform_band_covered", "Scalar", "Binary (0/1)", "Indicator I( forall t in [1, tau]: band_lower(t) <= RD_true(t) <= band_upper(t) ).", "Strict standard simultaneous coverage metric (Target >= 95%)."),
-        ("prop_time_points_covered (P_band)", "Scalar", "Numeric [0,1]", "Proportion of days covered: (1/tau) * sum_{t=1}^tau I(band_lower(t) <= RD_true(t) <= band_upper(t)).", "Captures trajectory partial coverage / boundary peeling."),
-        ("mean_band_width", "Scalar", "Numeric", "Average band width: (1/tau) * sum_{t=1}^tau [band_upper(t) - band_lower(t)].", "Precision/efficiency: tighter bands with nominal coverage are optimal.")
+        ("prop_time_points_covered (P_band)", "Scalar", "Numeric [0,1]", "Proportion of days covered: (1/tau) * sum_{t=1}^tau I(band_lower(t) <= RD_true(t) <= band_upper(t)). Evaluated for TMLE and CCW-KM.", "Captures trajectory partial coverage / boundary peeling."),
+        ("mean_band_width", "Scalar", "Numeric", "Average band width: (1/tau) * sum_{t=1}^tau [band_upper(t) - band_lower(t)]. Evaluated for TMLE and CCW-KM.", "Precision/efficiency: tighter bands with nominal coverage are optimal."),
+        ("elapsed_sec", "Scalar", "Numeric (sec)", "Wall-clock elapsed execution time in seconds: proc.time()['elapsed'] - t_start.", "Computational scalability and runtime benchmarking.")
     ]
 
     for v_name, v_dim, v_type, v_calc, v_role in per_run_records:
@@ -333,7 +334,8 @@ def build_excel_grid():
         ("Mean Pointwise Band Coverage (P_band)", "P_band_bar = (1/B) sum_{b=1}^B P_band^(b)", ">= 0.980 (98.0%)", "Average percentage of the 30-day timeline bounded by the simultaneous band. Quantifies trajectory robustness.", "Banded Trajectory"),
         ("Mean Band Width", "Width_bar = (1/(B*tau)) sum_{b=1}^B sum_{t=1}^tau [band_U^(b)(t) - band_L^(b)(t)]", "Minimal subject to Cov >= 95%", "Quantifies precision of simultaneous bands. Tighter bands indicate superior statistical efficiency.", "Efficiency"),
         ("Statistical Power (1 - beta)", "Power = (1/B) sum_{b=1}^B I( p_val_30^(b) < 0.05 )", "1.000 (100.0%)", "Probability of correctly rejecting null H0: RD(30)=0 given true benefit exists. Driven by efficiency.", "Hypothesis Testing"),
-        ("False Negative Rate (beta / FNR)", "FNR = 1.0 - Power", "0.000 (0.0%)", "Probability of falsely concluding no treatment benefit exists (Type II error). Exposes cost of inefficient models.", "Hypothesis Testing")
+        ("False Negative Rate (beta / FNR)", "FNR = 1.0 - Power", "0.000 (0.0%)", "Probability of falsely concluding no treatment benefit exists (Type II error). Exposes cost of inefficient models.", "Hypothesis Testing"),
+        ("Mean Elapsed Runtime (sec)", "Runtime_bar = (1/B) sum_{b=1}^B elapsed_sec^(b)", "Minimal (seconds)", "Computational speed, scaling profile across sample sizes, and practical feasibility.", "Computational Benchmarking")
     ]
 
     for m_name, m_math, m_target, m_interp, m_ademp in ademp_metrics:

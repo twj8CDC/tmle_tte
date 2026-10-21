@@ -192,3 +192,152 @@ compute_eic_inference <- function(panel_w,
     hr_summary = hr_summary
   ))
 }
+
+#' Inference for Clone-Censor-Weighted Kaplan-Meier (CCW-KM) with Simultaneous Bands
+#'
+#' @description Computes patient-clustered influence curves, pointwise standard errors,
+#'   pointwise Wald confidence intervals, and simultaneous confidence bands via the Multiplier
+#'   Bootstrap for the Inverse Probability of Censoring Weighted (IPCW) Kaplan-Meier estimator.
+#'
+#' @param panel_w Longitudinal person-time panel containing weights (from \code{\link{compute_ipcw_weights}}).
+#' @param tau Maximum follow-up time horizon (default 30).
+#' @param n_boot Multiplier bootstrap replicates (default 5000).
+#' @param alpha Significance level (default 0.05).
+#' @param seed Optional random seed.
+#'
+#' @return A list containing:
+#'   \describe{
+#'     \item{results}{Tibble containing survival for both arms, risk difference, pointwise SE, CIs, and simultaneous bands.}
+#'     \item{crit_val_simul}{Multiplier bootstrap critical value for simultaneous coverage.}
+#'     \item{ic_matrix}{Matrix of individual-level influence curves across time.}
+#'   }
+#' @export
+#' @importFrom dplyr select mutate arrange group_by ungroup summarise left_join case_when
+#' @importFrom tidyr pivot_wider replace_na
+#' @importFrom stats var qnorm quantile rnorm
+compute_ccw_km_inference <- function(panel_w,
+                                     tau = 30,
+                                     n_boot = 5000,
+                                     alpha = 0.05,
+                                     seed = NULL) {
+  
+  all_ids <- sort(unique(panel_w$id))
+  n_patients <- length(all_ids)
+  
+  # 1. Aggregate weighted at-risk and events per arm and time
+  w_col <- if ("w_trim" %in% names(panel_w)) "w_trim" else if ("w" %in% names(panel_w)) "w" else "w_unstab_trim"
+  panel_w$w_use <- panel_w[[w_col]]
+  
+  agg_time <- panel_w %>%
+    dplyr::group_by(arm, t) %>%
+    dplyr::summarise(
+      Y_bar = sum(w_use),
+      dN_bar = sum(w_use * event_cc_day),
+      .groups = "drop"
+    ) %>%
+    dplyr::mutate(
+      hazard_jump = dplyr::if_else(Y_bar > 1e-6, dN_bar / Y_bar, 0),
+      hazard_jump = pmin(pmax(hazard_jump, 0), 1 - 1e-6)
+    )
+  
+  # Marginal survival per arm
+  surv_arm <- agg_time %>%
+    dplyr::arrange(arm, t) %>%
+    dplyr::group_by(arm) %>%
+    dplyr::mutate(surv = cumprod(1 - hazard_jump)) %>%
+    dplyr::ungroup()
+  
+  # Merge hazard jumps back to panel to compute individual martingale jumps
+  # Scale by n_patients so IC is order O_p(1) such that Var(theta) = Var(IC) / N
+  panel_m <- panel_w %>%
+    dplyr::left_join(agg_time %>% dplyr::select(arm, t, Y_bar, hazard_jump), by = c("arm", "t")) %>%
+    dplyr::mutate(
+      dM_step = dplyr::if_else(Y_bar > 1e-6, n_patients * w_use * (event_cc_day - hazard_jump) / Y_bar, 0)
+    ) %>%
+    dplyr::arrange(id, arm, t) %>%
+    dplyr::group_by(id, arm) %>%
+    dplyr::mutate(cum_martingale = cumsum(dM_step)) %>%
+    dplyr::ungroup()
+  
+  # Expand to full grid (id x arm x t) for non-zero influence curves
+  full_grid <- expand.grid(
+    id = all_ids,
+    arm = c("control_no_tx", "treat_tx"),
+    t = seq_len(tau),
+    stringsAsFactors = FALSE
+  ) %>%
+    dplyr::as_tibble()
+  
+  ic_long <- full_grid %>%
+    dplyr::left_join(panel_m %>% dplyr::select(id, arm, t, cum_martingale), by = c("id", "arm", "t")) %>%
+    dplyr::arrange(id, arm, t) %>%
+    dplyr::group_by(id, arm) %>%
+    tidyr::fill(cum_martingale, .direction = "down") %>%
+    dplyr::mutate(cum_martingale = tidyr::replace_na(cum_martingale, 0)) %>%
+    dplyr::left_join(surv_arm %>% dplyr::select(arm, t, surv), by = c("arm", "t")) %>%
+    dplyr::group_by(arm) %>%
+    tidyr::fill(surv, .direction = "down") %>%
+    dplyr::mutate(surv = tidyr::replace_na(surv, 1.0)) %>%
+    dplyr::ungroup() %>%
+    dplyr::mutate(IC_a = - surv * cum_martingale) %>%
+    dplyr::select(id, arm, t, IC_a) %>%
+    tidyr::pivot_wider(names_from = arm, values_from = IC_a) %>%
+    dplyr::mutate(IC_RD = treat_tx - control_no_tx)
+  
+  # Pointwise variance
+  km_summary <- ic_long %>%
+    dplyr::group_by(t) %>%
+    dplyr::summarise(
+      var_IC_RD = stats::var(IC_RD) / n_patients,
+      se_RD = sqrt(var_IC_RD),
+      .groups = "drop"
+    )
+  
+  # Multiplier Bootstrap for Simultaneous Bands
+  ic_wide <- ic_long %>%
+    dplyr::select(id, t, IC_RD) %>%
+    tidyr::pivot_wider(names_from = t, values_from = IC_RD)
+  
+  ic_mat <- as.matrix(ic_wide[, -1])
+  n_times <- ncol(ic_mat)
+  
+  mean_ic <- colMeans(ic_mat)
+  centered_ic <- sweep(ic_mat, 2, mean_ic, "-")
+  
+  se_vec <- km_summary$se_RD
+  se_vec[se_vec == 0] <- 1e-6
+  
+  D_mat <- sweep(centered_ic, 2, se_vec * sqrt(n_patients), "/")
+  
+  if (!is.null(seed)) set.seed(seed)
+  Z_mat <- matrix(stats::rnorm(n_boot * n_patients), nrow = n_boot, ncol = n_patients)
+  G_proc <- (Z_mat %*% D_mat) / sqrt(n_patients)
+  sup_G <- apply(abs(G_proc), 1, max)
+  
+  crit_val_simul <- stats::quantile(sup_G, probs = 1 - alpha, names = FALSE)
+  crit_val_pointwise <- stats::qnorm(1 - alpha / 2)
+  
+  # Format marginal results
+  surv_wide <- surv_arm %>%
+    dplyr::select(arm, t, surv) %>%
+    tidyr::pivot_wider(names_from = arm, values_from = surv) %>%
+    dplyr::mutate(rd = treat_tx - control_no_tx)
+  
+  results <- surv_wide %>%
+    dplyr::left_join(km_summary, by = "t") %>%
+    dplyr::mutate(
+      rd_ci_lower = rd - crit_val_pointwise * se_RD,
+      rd_ci_upper = rd + crit_val_pointwise * se_RD,
+      rd_band_lower = rd - crit_val_simul * se_RD,
+      rd_band_upper = rd + crit_val_simul * se_RD,
+      hr_marginal = log(pmax(pmin(treat_tx, 1 - 1e-6), 1e-6)) / log(pmax(pmin(control_no_tx, 1 - 1e-6), 1e-6))
+    )
+  
+  return(list(
+    results = results,
+    crit_val_simul = crit_val_simul,
+    crit_val_pointwise = crit_val_pointwise,
+    ic_matrix = ic_mat,
+    se_RD = km_summary$se_RD
+  ))
+}

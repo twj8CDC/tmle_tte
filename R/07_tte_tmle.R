@@ -161,28 +161,22 @@ tte_tmle <- function(data,
     seed = seed
   )
   
-  # Step 7: Standard CCW Weighted KM Comparison
-  sum_log <- summary(ipcw_res$fit_ccw, times = 1:tau, extend = TRUE)
-  res_log <- tibble::tibble(
-    t = sum_log$time, 
-    tx = sum_log$strata, 
-    sv = sum_log$surv,
-    se = sum_log$std.err
-  ) %>%
-    dplyr::mutate(tx = gsub("^arm=", "", tx)) %>% 
-    tidyr::pivot_wider(names_from = tx, values_from = c(sv, se)) %>% 
-    dplyr::mutate(
-      rd = sv_treat_tx - sv_control_no_tx,
-      rd_se = sqrt(se_control_no_tx^2 + se_treat_tx^2),
-      ci_lower = rd - stats::qnorm(1 - alpha / 2) * rd_se,
-      ci_upper = rd + stats::qnorm(1 - alpha / 2) * rd_se
-    )
+  # Step 7: Standard CCW Weighted KM Comparison with Simultaneous Confidence Bands
+  km_inf <- compute_ccw_km_inference(
+    panel_w = panel_w,
+    tau = tau,
+    n_boot = n_boot,
+    alpha = alpha,
+    seed = seed
+  )
+  res_log <- km_inf$results
   
   out <- list(
     res_tmle = inf_res$res_tmle,
     res_log = res_log,
     fit_ccw = ipcw_res$fit_ccw,
     crit_val_simul = inf_res$crit_val_simul,
+    crit_val_simul_km = km_inf$crit_val_simul,
     crit_val_pointwise = inf_res$crit_val_pointwise,
     eps = c(eps_ctrl = eps_ctrl, eps_treat_pre = eps_treat_pre, eps_treat_post = eps_treat_post),
     eic_summary = inf_res$eic_summary,
