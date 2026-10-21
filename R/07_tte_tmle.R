@@ -186,6 +186,8 @@ tte_tmle <- function(data,
     crit_val_pointwise = inf_res$crit_val_pointwise,
     eps = c(eps_ctrl = eps_ctrl, eps_treat_pre = eps_treat_pre, eps_treat_post = eps_treat_post),
     eic_summary = inf_res$eic_summary,
+    ic_matrix = inf_res$ic_matrix,
+    hr_summary = inf_res$hr_summary,
     data = panel_w,
     params = list(
       grace_period = grace_period,

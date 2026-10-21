@@ -61,16 +61,17 @@ evaluate_ademp_metrics <- function(sim_results,
     iter_coverage <- merged_traj %>%
       dplyr::group_by(method, iteration) %>%
       dplyr::summarise(
-        all_covered = all(truth >= band_lower & truth <= band_upper, na.rm = TRUE),
-        mean_band_w = mean(band_upper - band_lower, na.rm = TRUE),
+        has_band = any(!is.na(band_lower)),
+        all_covered = if (any(!is.na(band_lower))) all(truth >= band_lower & truth <= band_upper, na.rm = TRUE) else NA,
+        mean_band_w = if (any(!is.na(band_lower))) mean(band_upper - band_lower, na.rm = TRUE) else NA_real_,
         .groups = "drop"
       )
     
     band_summary <- iter_coverage %>%
       dplyr::group_by(method) %>%
       dplyr::summarise(
-        band_coverage_95 = mean(all_covered, na.rm = TRUE),
-        band_width = mean(mean_band_w, na.rm = TRUE),
+        band_coverage_95 = if (all(is.na(all_covered))) NA_real_ else mean(all_covered, na.rm = TRUE),
+        band_width = if (all(is.na(mean_band_w))) NA_real_ else mean(mean_band_w, na.rm = TRUE),
         .groups = "drop"
       )
     

@@ -136,18 +136,30 @@ compute_ipcw_weights <- function(clones,
           t == grace_period + 1L ~ p_treat_num / p_treat_denom,
           TRUE ~ 1
         )
+      ),
+      w_inc_unstab = dplyr::case_when(
+        arm == "control_no_tx" ~ 1 / (1 - p_ctrl_denom),
+        arm == "treat_tx" ~ dplyr::case_when(
+          t == grace_period + 1L ~ 1 / p_treat_denom,
+          TRUE ~ 1
+        )
       )
     ) %>%
     dplyr::arrange(clone_id, t) %>%
     dplyr::group_by(clone_id) %>%
-    dplyr::mutate(w_ipcw_time = cumprod(w_inc)) %>%
+    dplyr::mutate(
+      w_ipcw_time = cumprod(w_inc),
+      w_unstab_time = cumprod(w_inc_unstab)
+    ) %>%
     dplyr::ungroup()
   
   q_lim <- stats::quantile(panel$w_ipcw_time, probs = trim_quantile, na.rm = TRUE)
+  q_lim_unstab <- stats::quantile(panel$w_unstab_time, probs = trim_quantile, na.rm = TRUE)
   
   panel_w <- panel %>%
     dplyr::mutate(
       w_trim = pmin(pmax(w_ipcw_time, q_lim[1]), q_lim[2]),
+      w_unstab_trim = pmin(pmax(w_unstab_time, q_lim_unstab[1]), q_lim_unstab[2]),
       post_grace = dplyr::if_else(t > grace_period, 1, 0)
     )
   

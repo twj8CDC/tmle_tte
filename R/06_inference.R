@@ -38,12 +38,27 @@ compute_eic_inference <- function(panel_w,
                                   seed = NULL) {
   
   # 1. Martingale Step Residuals on Cloned Panel
+  # Extract individual conditional survival from cf_data to scale martingale denominator: S(u-1 | W)
+  cf_surv_prev <- cf_data %>%
+    dplyr::select(id, arm, t, indiv_survival) %>%
+    dplyr::arrange(id, arm, t) %>%
+    dplyr::group_by(id, arm) %>%
+    dplyr::mutate(S_prev = dplyr::lag(indiv_survival, default = 1)) %>%
+    dplyr::ungroup() %>%
+    dplyr::select(id, arm, t, S_prev)
+  
+  # Use unstabilized IPCW weights for semiparametrically efficient score scaling if available
+  w_eic <- if ("w_unstab_trim" %in% names(panel_w)) panel_w$w_unstab_trim else panel_w$w_trim
+  
   panel_w <- panel_w %>%
+    dplyr::mutate(w_eic = w_eic) %>%
+    dplyr::left_join(cf_surv_prev, by = c("id", "arm", "t")) %>%
     dplyr::mutate(
+      S_prev = tidyr::replace_na(S_prev, 1),
       Q_star_hazard = stats::plogis(Q_init_logit + eps_ctrl * H_ctrl + 
                                       eps_treat_pre * H_treat_pre + 
                                       eps_treat_post * H_treat_post),
-      D_martingale_step = w_trim * (event_cc_day - Q_star_hazard) / pmax(1 - Q_star_hazard, 1e-6)
+      D_martingale_step = w_eic * (event_cc_day - Q_star_hazard) / pmax(S_prev * (1 - Q_star_hazard), 1e-4)
     ) %>%
     dplyr::arrange(clone_id, t) %>%
     dplyr::group_by(clone_id) %>%
