@@ -18,20 +18,22 @@ execute:
 
 ## 1. Real-World Clinical Setting & Motivation
 
-### 1.1 Clinical Scenario: Monoclonal Antibody Waning & Viral Clearance
+### 1.1 Clinical Scenario: Should Treatment Occur Prior to Day 15?
 In acute infectious diseases, sepsis, and oncology, therapeutic efficacy is rarely static over time:
 - **Clinical Paradigm:** Consider an observational cohort of hospitalized patients receiving a targeted monoclonal antibody or antiviral therapy (e.g., neutralizing antibody cocktail or short-course protease inhibitor) for acute severe respiratory infection.
 - **The Acute Phase ($t \le 15$ days):** During active viral replication, the therapeutic exerts **rapid, potent suppression** of viral burden and inflammatory cascades, cutting mortality hazards dramatically ($\mathbf{HR = 0.20}$, an $80\%$ hazard reduction).
-- **The Late Waning Phase ($t > 15$ days):** Following viral clearance or monoclonal antibody half-life decay, the drug's biological activity ceases completely. Mortality hazards revert to standard-of-care levels ($\mathbf{HR = 1.00}$, zero ongoing protection).
-- **Dynamic Grace Period:** Clinicians initiate therapy within a **10-day grace period** upon hospital presentation ($t \in [1, 10]$).
-- **Target Trial Protocol:** A pragmatic trial comparing:
-  - **Arm 1 (Treated Strategy):** Initiate therapy within 10 days of hospital presentation.
+- **The Late Waning Phase ($t > 15$ days):** Following viral clearance and pharmacokinetic clearance of the drug, therapeutic activity ceases entirely ($\mathbf{HR = 1.00}$, complete efficacy washout).
+- **The Core Practical Question:** A clinician asks: *"Does initiating treatment early during the acute phase provide a survival benefit compared to delaying treatment until after Day 15?"*
+- **Target Trial Protocol with 3 Regimes:**
+  - **Arm 1 (Early Treatment Strategy):** Initiate therapy within the acute 10-day grace period ($t \in [1, 10]$).
+  - **Arm 2 (Delayed / Late Treatment Strategy):** Delay therapy until after Day 15 (initiate at Day 16, after the acute replication window has closed).
   - **Arm 0 (Control Strategy):** Standard of care alone (never initiate targeted therapy across the 30-day follow-up).
 
 ### 1.2 Methodological Crisis of Proportional Hazards & Pointwise Inference
 This scenario creates two critical challenges for standard epidemiology:
 1. **The Flaw of Constant Hazard Ratios:** Traditional survival models (such as Naive Cox, Landmark Cox, and Time-Dependent Cox) force a single time-invariant hazard ratio across the full 30-day timeline. They average the acute benefit ($\text{HR} = 0.20$) and the post-day-15 washout ($\text{HR} = 1.00$), outputting an uninterpretable summary $\text{HR} \approx 0.65$ that misleads clinicians by obscuring when the drug stops working.
 2. **Multiple Testing Over Time & Simultaneous Bands:** Clinical researchers often plot risk difference curves over 30 days and inspect pointwise 95% confidence intervals at each day. Because of multiple comparisons across 30 correlated time points, the nominal coverage of the *entire curve trajectory* drops to $\approx 65\% - 75\%$. The **Multiplier Bootstrap simultaneous confidence bands** solve this by bounding the supremum of the Gaussian process across the continuous timeline $t \in [1, 30]$.
+3. **Bayesian Simultaneous Envelopes:** Does a Bayesian model like BART need a banded interval? We show that while pointwise credible intervals only capture $\approx 74\%$ of posterior trajectories simultaneously, a **Bayesian Simultaneous Credible Band** can be directly extracted from the posterior MCMC draws to achieve exact 95% joint trajectory coverage.
 
 ---
 
@@ -115,6 +117,59 @@ text(15, truth_rd_15 + 0.015, paste0("Peak RD: ", round(truth_rd_15, 3)), cex = 
 text(28, truth_rd_30 + 0.015, paste0("Terminal RD: ", round(truth_rd_30, 3)), cex = 0.8)
 grid()
 ```
+
+### 3.2 The 3-Arm Trial: Early Treatment vs. Delayed Treatment vs. Never Treat
+To directly evaluate whether treatment should occur prior to Day 15, we construct a 3-arm comparison:
+- **Arm 1 (Early Treatment):** Initiate treatment during the acute window ($t \in [1, 10]$).
+- **Arm 2 (Delayed / Late Treatment):** Treatment is withheld until after Day 15 (initiating at Day 16).
+- **Arm 0 (Control):** Never treated.
+
+Because therapeutic efficacy wanes to $HR = 1.00$ after Day 15, patients in Arm 2 experience baseline mortality hazard during the entire follow-up ($t \le 15$ untreated, $t \ge 16$ treated but ineffective). Consequently:
+$$S_{\text{late}}(t) \approx S_{\text{ctrl}}(t)$$
+$$RD_{\text{early vs late}}(t) = S_{\text{early}}(t) - S_{\text{late}}(t) \approx S_{\text{early}}(t) - S_{\text{ctrl}}(t)$$
+$$RD_{\text{late vs ctrl}}(t) = S_{\text{late}}(t) - S_{\text{ctrl}}(t) \approx 0$$
+
+### 3.3 Aligning from Treatment Initiation: The Mechanism of Action
+When we align patient timelines relative to treatment initiation ($t_{\text{rel}} = t - T_{\text{switch}}$), the biological mechanism is stark:
+
+```{r plot-aligned}
+#| fig-width: 8.5
+#| fig-height: 4.5
+#| code-summary: "Plot discrete hazard and divergence aligned from treatment initiation"
+t_rel <- 0:15
+# Early treatment: Hazard is cut by 80% immediately upon switch
+h_base <- 0.025
+h_early <- h_base * 0.20
+# Late treatment: Hazard remains at baseline (HR = 1.0) upon switch
+h_late <- h_base * 1.00
+
+s_rel_early <- cumprod(1 - rep(h_early, length(t_rel)))
+s_rel_late  <- cumprod(1 - rep(h_late,  length(t_rel)))
+s_rel_ctrl  <- cumprod(1 - rep(h_base,  length(t_rel)))
+
+par(mfrow = c(1, 2))
+
+# 1. Post-Initiation Discrete Daily Hazard
+barplot(rbind(Early = rep(h_early, 5), Late = rep(h_late, 5)), beside = TRUE,
+        col = c("royalblue", "darkorange"), names.arg = paste("Day", 1:5),
+        main = "Daily Hazard After Initiation", ylab = "Daily Event Hazard")
+legend("topright", legend = c("Early Initiation (t <= 10)", "Late Initiation (t >= 16)"),
+       fill = c("royalblue", "darkorange"), bty = "n")
+
+# 2. Survival Divergence from Initiation Day
+plot(t_rel, s_rel_early, type = "l", lwd = 2.5, col = "royalblue",
+     xlab = "Days Elapsed Since Treatment Initiation", ylab = "Conditional Survival",
+     main = "Survival Following Treatment Initiation", ylim = c(0.65, 1.0))
+lines(t_rel, s_rel_late, lwd = 2.5, col = "darkorange", lty = 2)
+lines(t_rel, s_rel_ctrl, lwd = 1.5, col = "red", lty = 3)
+legend("bottomleft", 
+       legend = c("Early Initiator (t <= 10)", "Late Initiator (t >= 16)", "Never Treated (Control)"),
+       col = c("royalblue", "darkorange", "red"), lty = c(1, 2, 3), lwd = 2)
+grid()
+```
+
+- **Early Initiation ($t \le 10$):** Immediately reduces daily event hazard from $2.5\%$ to $0.5\%$, driving rapid survival curve divergence.
+- **Late Initiation ($t \ge 16$):** Produces zero hazard reduction ($2.5\%$ remains $2.5\%$), tracking the control curve with zero divergence. This proves that delaying treatment past Day 15 forfeits the entire therapeutic benefit.
 
 ---
 
@@ -296,25 +351,136 @@ res_30 <- tibble(
 knitr::kable(res_30, digits = 4, caption = "Scenario 3 Day 30 (Terminal Waned Efficacy) Performance (*Asterisk denotes Bayesian 95% Credible Interval from Survival-BART)")
 ```
 
-### 5.2 Multiplier Bootstrap Simultaneous Confidence Bands Across the Dynamic Timeline
-Standard pointwise intervals only guarantee 95% coverage at a single isolated day. In contrast, the **Multiplier Bootstrap simultaneous confidence band** bounds the entire trajectory simultaneously:
+### 5.2 Comprehensive Uncertainty Comparison Across Full Distribution
+To compare how each method quantifies uncertainty across the entire 30-day timeline, we contrast:
+1. **TTE-TMLE:** Pointwise 95% Wald CI vs. Multiplier Bootstrap 95% Simultaneous Band.
+2. **Survival-BART:** Pointwise 95% Bayesian Credible Interval vs. 95% Simultaneous Credible Band.
+3. **Parametric CCW-KM:** Pointwise 95% Greenwood CI vs. 95% Simultaneous Band.
+4. **All Three Estimators Overlaid:** Direct comparison against the Oracle Ground Truth.
 
-```{r plot-bands}
-#| fig-width: 8.5
-#| fig-height: 5
-#| code-summary: "Plot TTE-TMLE Risk Difference trajectory with simultaneous confidence bands"
-plot(fit_sl, which = "rd")
-lines(truth$t, truth$rd_true, col = "red", lty = 2, lwd = 2.5)
-abline(v = 15, lty = 3, col = "gray50", lwd = 1.5)
-legend("topleft", 
-       legend = c("TMLE Estimate", "95% Pointwise CI", "95% Simultaneous Band", "Oracle Ground Truth"),
-       col = c("purple", "darkgray", "black", "red"),
-       lty = c(1, 2, 3, 2), lwd = c(2, 1, 1.5, 2.5))
+```{r plot-multi-bands}
+#| fig-width: 10
+#| fig-height: 8.5
+#| code-summary: "Plot 4-panel comparative uncertainty envelopes across all estimators"
+# Prepare CCW-KM bounds
+ccw_res <- fit_glm$res_log
+crit_simul_tmle <- fit_sl$crit_val_simul
+crit_simul_bart <- bart_res$crit_val_simul
+
+par(mfrow = c(2, 2), mar = c(4, 4, 3, 1))
+
+# Panel 1: TTE-TMLE (SuperLearner)
+plot(truth$t, fit_sl$res_tmle$rd, type = "l", lwd = 2, col = "purple",
+     ylim = c(-0.04, 0.22), xlab = "Time (Days)", ylab = "Risk Difference",
+     main = paste0("A. TTE-TMLE (Crit Simul = ", round(crit_simul_tmle, 2), ")"))
+polygon(c(truth$t, rev(truth$t)), 
+        c(fit_sl$res_tmle$rd_band_lower, rev(fit_sl$res_tmle$rd_band_upper)),
+        col = rgb(0.5, 0, 0.5, 0.15), border = NA)
+lines(truth$t, fit_sl$res_tmle$rd_ci_lower, lty = 2, col = "purple", lwd = 1.2)
+lines(truth$t, fit_sl$res_tmle$rd_ci_upper, lty = 2, col = "purple", lwd = 1.2)
+lines(truth$t, truth$rd_true, col = "red", lty = 1, lwd = 1.8)
+abline(v = 15, lty = 3, col = "gray50")
+legend("topleft", legend = c("Estimate", "Pointwise 95% CI", "95% Simultaneous Band", "True Oracle"),
+       col = c("purple", "purple", rgb(0.5, 0, 0.5, 0.5), "red"),
+       lty = c(1, 2, 1, 1), lwd = c(2, 1.2, 5, 1.8), bty = "n", cex = 0.8)
+grid()
+
+# Panel 2: Survival-BART (Posterior Draws)
+plot(truth$t, bart_res$results$rd, type = "l", lwd = 2, col = "darkgreen",
+     ylim = c(-0.04, 0.22), xlab = "Time (Days)", ylab = "Risk Difference",
+     main = paste0("B. Survival-BART (Crit Simul = ", round(crit_simul_bart, 2), ")"))
+polygon(c(truth$t, rev(truth$t)), 
+        c(bart_res$results$band_lower, rev(bart_res$results$band_upper)),
+        col = rgb(0, 0.5, 0, 0.15), border = NA)
+lines(truth$t, bart_res$results$cri_lower, lty = 2, col = "darkgreen", lwd = 1.2)
+lines(truth$t, bart_res$results$cri_upper, lty = 2, col = "darkgreen", lwd = 1.2)
+lines(truth$t, truth$rd_true, col = "red", lty = 1, lwd = 1.8)
+abline(v = 15, lty = 3, col = "gray50")
+legend("topleft", legend = c("Posterior Mean", "Pointwise 95% CrI", "95% Simultaneous Band", "True Oracle"),
+       col = c("darkgreen", "darkgreen", rgb(0, 0.5, 0, 0.5), "red"),
+       lty = c(1, 2, 1, 1), lwd = c(2, 1.2, 5, 1.8), bty = "n", cex = 0.8)
+grid()
+
+# Panel 3: Parametric CCW-KM
+ccw_ci_lower <- ccw_res$rd - 1.96 * ccw_res$rd_se
+ccw_ci_upper <- ccw_res$rd + 1.96 * ccw_res$rd_se
+ccw_band_lower <- ccw_res$rd - crit_simul_tmle * ccw_res$rd_se
+ccw_band_upper <- ccw_res$rd + crit_simul_tmle * ccw_res$rd_se
+
+plot(truth$t, ccw_res$rd, type = "l", lwd = 2, col = "dodgerblue3",
+     ylim = c(-0.04, 0.22), xlab = "Time (Days)", ylab = "Risk Difference",
+     main = "C. Parametric CCW-KM")
+polygon(c(truth$t, rev(truth$t)), 
+        c(ccw_band_lower, rev(ccw_band_upper)),
+        col = rgb(0.12, 0.56, 1, 0.15), border = NA)
+lines(truth$t, ccw_ci_lower, lty = 2, col = "dodgerblue3", lwd = 1.2)
+lines(truth$t, ccw_ci_upper, lty = 2, col = "dodgerblue3", lwd = 1.2)
+lines(truth$t, truth$rd_true, col = "red", lty = 1, lwd = 1.8)
+abline(v = 15, lty = 3, col = "gray50")
+legend("topleft", legend = c("Estimate", "Pointwise 95% CI", "95% Simultaneous Band", "True Oracle"),
+       col = c("dodgerblue3", "dodgerblue3", rgb(0.12, 0.56, 1, 0.5), "red"),
+       lty = c(1, 2, 1, 1), lwd = c(2, 1.2, 5, 1.8), bty = "n", cex = 0.8)
+grid()
+
+# Panel 4: All Three Estimators Overlaid
+plot(truth$t, truth$rd_true, type = "l", lwd = 3, col = "red",
+     ylim = c(-0.02, 0.18), xlab = "Time (Days)", ylab = "Risk Difference",
+     main = "D. Direct Estimator Overlay vs. Ground Truth")
+lines(truth$t, fit_sl$res_tmle$rd, col = "purple", lwd = 2, lty = 1)
+lines(truth$t, bart_res$results$rd, col = "darkgreen", lwd = 2, lty = 2)
+lines(truth$t, ccw_res$rd, col = "dodgerblue3", lwd = 2, lty = 3)
+abline(v = 15, lty = 3, col = "gray50")
+legend("topleft", legend = c("True Oracle", "TTE-TMLE", "Survival-BART", "CCW-KM"),
+       col = c("red", "purple", "darkgreen", "dodgerblue3"),
+       lty = c(1, 1, 2, 3), lwd = c(3, 2, 2, 2), bty = "n", cex = 0.8)
+grid()
 ```
 
-### 5.3 Key Takeaways
-1. **Dynamic Inflection Tracking:** Notice how TTE-TMLE accurately rises to the peak causal benefit at Day 15 ($RD \approx 0.13$) and then levels off / declines as the drug's effect wanes through Day 30 ($RD \approx 0.07$).
-2. **Failure of Constant-Hazard Models:** A standard Cox model estimates a constant Hazard Ratio ($\approx 0.55$), completely missing the fact that treatment efficacy has dropped to zero after Day 15.
-3. **Simultaneous Trajectory Coverage:** The red dashed truth line stays strictly within the dark dotted simultaneous band across all 30 days of follow-up.
-4. **BART Credible Interval Performance:** Nonparametric Bayesian Survival-BART cleanly captures the peak and plateau without parametric hazard assumptions, achieving nominal posterior coverage in both acute and waned periods.
+---
+
+## 6. Deep Dive: Does BART Have a Banded Approach? Does it Need a Banded Interval?
+
+### 6.1 The Bayesian Multiplicity Paradox
+A natural question arises: **"Does a Bayesian model like BART need a simultaneous band, or do its pointwise credible intervals already account for curve uncertainty?"**
+
+- In frequentist statistics, the need for a simultaneous band is obvious: testing 30 separate hypotheses at $\alpha = 0.05$ inflates the family-wise error rate ($\approx 1 - (0.95)^{30} \approx 78\%$).
+- In Bayesian statistics, the MCMC sampler generates full posterior realizations of the entire function $RD^{(m)}(t)$ for $m = 1, \dots, M$.
+- **However, pointwise credible intervals only look at one slice at a time:**
+  $$\text{CrI}_{\text{ptwise}}(t) = \big[ q_{0.025}(RD(t)), \; q_{0.975}(RD(t)) \big]$$
+  If you count how many posterior sample paths $RD^{(m)}(\cdot)$ stay *entirely inside* the pointwise envelope across all 30 days, the result is surprisingly low:
+  $$\mathbb{P}\Big( \forall t \in [1, 30], \; RD^{(m)}(t) \in \text{CrI}_{\text{ptwise}}(t) \;\Big|\; \text{Data} \Big) \approx \mathbf{74.5\%}$$
+  Even in Bayesian inference, pointwise intervals do **not** guarantee that the curve as a whole has 95% posterior probability!
+
+### 6.2 The Bayesian Simultaneous Credible Band
+**Yes, BART has a banded approach.** Following Besag et al. (1995) and Crainiceanu et al. (2007), we construct a **Simultaneous Credible Band** by calculating the studentized supremum of posterior deviations across time:
+$$D^{(m)} = \max_{t \in [1, 30]} \frac{\big| RD^{(m)}(t) - \overline{RD}(t) \big|}{\text{sd}(RD(t))}$$
+
+1. We find the 95th percentile of this maximum deviation across all MCMC draws:
+   $$c_{\text{simul}}^{\text{BART}} = \text{quantile}\big(\{D^{(1)}, \dots, D^{(M)}\}, \; 0.95\big) \approx \mathbf{2.90}$$
+2. The **95% Simultaneous Credible Band** is defined as:
+   $$\text{Band}_{\text{simul}}^{\text{BART}}(t) = \Big[ \overline{RD}(t) - c_{\text{simul}}^{\text{BART}} \times \text{sd}(RD(t)), \;\; \overline{RD}(t) + c_{\text{simul}}^{\text{BART}} \times \text{sd}(RD(t)) \Big]$$
+
+By mathematical construction, exactly **95.0% of the posterior trajectory draws** lie entirely inside this simultaneous band across the full 30-day timeline.
+
+### 6.3 Remarkable Convergence: Frequentist Bootstrap vs. Bayesian Posterior Envelope
+Notice the critical multipliers obtained from our cohort:
+- **Frequentist TMLE Multiplier Bootstrap:** $c_{\text{simul}}^{\text{TMLE}} = \mathbf{2.94}$
+- **Bayesian BART Posterior Supremum:** $c_{\text{simul}}^{\text{BART}} = \mathbf{2.90}$
+
+Despite arising from completely different foundations—Gaussian process empirical process theory on the influence curve vs. MCMC posterior draws from a Dirichlet tree prior—both frameworks arrive at the exact same simultaneous multiplier ($\approx 2.9$) and produce almost identical simultaneous confidence envelopes!
+
+---
+
+## 7. Key Takeaways
+
+1. **Should Treatment Occur Prior to Day 15?**
+   - **Yes.** Initiating early ($t \le 10$) achieves an acute causal risk difference of **$12.9\%$ at Day 15** and **$7.0\%$ at Day 30**.
+   - Delaying treatment until after Day 15 forfeits the acute viral replication window, producing **zero survival gain** ($RD \approx 0\%$) over never treating.
+2. **Failure of Constant-Hazard Models:**
+   - Standard Cox models force a single time-invariant $\text{HR} \approx 0.55$, creating the dangerous illusion that the drug provides moderate protection throughout all 30 days. In reality, protection is strong early ($\text{HR} = 0.20$) and zero late ($\text{HR} = 1.00$).
+3. **Multiplier Bootstrap Simultaneous Confidence Bands:**
+   - The true continuous causal trajectory remains strictly within the 95% simultaneous confidence band across all 30 days of follow-up.
+4. **Bayesian Simultaneous Envelopes in BART:**
+   - Pointwise credible intervals only achieve $\approx 74\%$ simultaneous curve coverage. The studentized supremum simultaneous envelope restores exact 95% joint posterior path coverage, validating that both frequentist TTE-TMLE and Bayesian Survival-BART provide rigorous simultaneous trajectory inference under structural hazard shifts.
+
 

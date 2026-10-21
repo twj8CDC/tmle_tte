@@ -124,6 +124,16 @@ fit_bart_gcomp <- function(data,
   cri_lower <- apply(rd_draws, 2, stats::quantile, probs = 0.025)
   cri_upper <- apply(rd_draws, 2, stats::quantile, probs = 0.975)
   
+  # 6. Simultaneous Credible Band via Supremum of Posterior Deviations
+  # Orders posterior trajectory draws by maximum studentized deviation:
+  # exactly 95% of posterior sample paths lie entirely within [band_lower, band_upper]
+  std_dev <- t(apply(rd_draws, 1, function(x) abs(x - mean_rd) / pmax(sd_rd, 1e-6)))
+  sup_dev <- apply(std_dev, 1, max)
+  crit_simul <- stats::quantile(sup_dev, probs = 0.95, names = FALSE)
+  
+  band_lower <- mean_rd - crit_simul * sd_rd
+  band_upper <- mean_rd + crit_simul * sd_rd
+  
   res_table <- tibble::tibble(
     t = seq_len(tau),
     control_no_tx = mean_s0,
@@ -132,12 +142,16 @@ fit_bart_gcomp <- function(data,
     se_RD = sd_rd,
     cri_lower = cri_lower,
     cri_upper = cri_upper,
-    cri_width = cri_upper - cri_lower
+    cri_width = cri_upper - cri_lower,
+    band_lower = band_lower,
+    band_upper = band_upper,
+    band_width = band_upper - band_lower
   )
   
   return(list(
     results = res_table,
     rd_draws = rd_draws,
+    crit_val_simul = crit_simul,
     fit_bart = bart_fit
   ))
 }
