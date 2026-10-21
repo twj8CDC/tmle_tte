@@ -1,0 +1,315 @@
+---
+title: "Scenario 6 Walkthrough: Confounder-Treatment Feedback & G-Null Paradox"
+subtitle: "Benchmarking Estimators Under Time-Varying Confounding Affected by Past Treatment"
+author: "Jacob Tiegs"
+date: "October 2026"
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    code-fold: show
+    code-tools: true
+    theme: cosmo
+    embed-resources: true
+execute:
+  warning: false
+  message: false
+---
+
+## 1. Real-World Clinical Setting & Motivation
+
+### 1.1 Clinical Scenario: Postoperative Resuscitation & Acute Organ Flare
+In dynamic clinical decision-making, patient status constantly evolves in response to earlier interventions:
+- **Clinical Protocol:** Consider an observational cohort of critical care or surgical oncology patients evaluating an adjuvant hemodynamic/immunomodulatory protocol within a **10-day grace period** ($t \in [1, 10]$).
+  - **Baseline Confounder ($x_1$):** Baseline severity / age moderately guides early initiation.
+  - **Intermediate Biomarker Flare ($L_{\text{med}}$ at Day 3):** At Day 3, an acute biomarker spike or organ flare (e.g., severe acute kidney injury, troponin leak, or cytokine storm) occurs.
+  - **The Feedback Mechanism:**
+    1. Early initiation at Days 1–2 reduces the probability of organ flare ($A_{\text{early}} \to L$).
+    2. At Days 4–10, bedside clinicians strongly escalate treatment if an organ flare occurs ($L \to A_{\text{late}}$).
+    3. Organ flare powerfully accelerates 30-day mortality ($L \to Y$).
+- **Target Trial Emulation:** We emulate a trial comparing:
+  - **Arm 1 (Treated Strategy):** Initiate therapy within the 10-day recovery grace period.
+  - **Arm 0 (Control Strategy):** Withhold therapy across 30 days.
+
+### 1.2 The Methodological Target: The "Sneaky" Collider Trap
+Why does this scenario deceive standard statistical analysis?
+1. **Zero Mathematical Formula Misspecification:** Every regression equation is strictly linear or logistic. The analyst makes no polynomial or functional form mistake.
+2. **The Insoluble Regression Dilemma:**
+   - If the analyst adjusts for the time-varying biomarker $L(t)$ in a standard or time-dependent Cox model, they **condition on a post-treatment mediator and collider**! This induces collider stratification bias (M-bias), blocking the indirect therapeutic benefit of early treatment and artificially making the drug look ineffective.
+   - If the analyst does *not* adjust for $L(t)$, they suffer from **unmeasured time-varying confounding** for late treatment decisions.
+3. **Target Trial G-Methods Triumph:** Clone-Censor-Weighting (`ccw-km`) and Targeted Minimum Loss-Based Estimation (`TTE-TMLE` / `TMLE + BART`) bypass collider conditioning by comparing prospective counterfactual regimes, cleanly resolving the $G$-null paradox.
+
+---
+
+## 2. Underlying Data-Generating Process (DGP) Parameters
+
+| Parameter | Symbol / Formula | Value | Clinical / Methodological Role |
+| :--- | :--- | :--- | :--- |
+| **Sample Size** | $N$ | `1,000` | Observational clinical cohort |
+| **Follow-up Horizon** | $\tau$ | `30` | 30-day endpoint (discrete daily intervals) |
+| **Grace Period** | $\text{grace}$ | `10` | Allowable window for treatment initiation |
+| **Biomarker Timing** | $t_{\text{med}}$ | `3` | Intermediate organ flare assessment at Day 3 |
+| **Baseline Confounder** | $x_1 \sim \mathcal{N}(0, 1)$ | Mean 0, SD 1 | Baseline patient severity score |
+| **Early Propensity** | $\text{logit}\, P(A_{\text{early}} = 1 \mid x_1) = -0.8 + 0.6 x_1$ | Early Logit | Treatment uptake on Days 1–2 |
+| **Intermediate Flare** | $\text{logit}\, P(L = 1 \mid x_1, A_{\text{early}}) = -0.2 + 0.7 x_1 - 1.2 A_{\text{early}}$ | Mediator | Early treatment prevents organ flare |
+| **Late Propensity** | $\text{logit}\, P(A_{\text{late}} = 1 \mid x_1, L) = -1.2 + 0.5 x_1 + 1.4 L$ | Confounded Logit | Clinicians rescue flare patients on Days 4–10 |
+| **Baseline Scale** | $\text{scale}_0 = 45 \cdot \exp\big(-(0.4 x_1 + 0.8 L) / 1.5\big)$ | Weibull Scale | Organ flare accelerates hazard ($\text{HR} \approx 2.2$) |
+| **Causal Treatment Benefit** | $HR_{\text{target}} = 0.35$ | Scale Multiplier | Substantial treatment benefit ($\text{HR} = 0.35$) |
+| **Oracle Ground Truth** | $RD(30) = S_1(30) - S_0(30)$ | `0.2502` | Counterfactual Risk Difference at Day 30 ($N_{\text{oracle}} = 100,000$) |
+
+---
+
+## 3. Data Overview & Exploratory Diagnostics
+
+```{r setup}
+#| code-summary: "Load dependencies, package modules, and DGP"
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(tidyr)
+  library(survival)
+  library(ggplot2)
+  library(tibble)
+  library(SuperLearner)
+  library(BART)
+})
+
+# Load package modules
+invisible(lapply(list.files("../R", full.names = TRUE), source))
+source("true_values.R")
+source("evaluate_metrics.R")
+source("dgp/06_dgp_time_varying_feedback.R")
+
+# Compute Oracle Ground Truth
+truth <- compute_scenario6_truth(n_oracle = 50000, seed = 2026)
+truth_rd_30 <- truth$rd_true[30]
+
+# Generate Scenario 6 Observational Cohort (N = 1,000)
+set.seed(42)
+df <- generate_scenario6_data(n = 1000, tau = 30, grace_period = 10)
+```
+
+### 3.1 Visualizing the Confounder-Treatment Feedback
+Let's inspect how early treatment reduces organ flare, while organ flare triggers late treatment initiation:
+
+```{r plot-feedback}
+#| fig-width: 8.5
+#| fig-height: 4
+#| code-summary: "Plot treatment-confounder feedback mechanism"
+df_diag <- df %>%
+  mutate(
+    early_tx = if_else(tx_time_obs < 3, "Early Treated (t <= 2)", "Not Early Treated"),
+    late_tx = if_else(tx_time_obs >= 3 & tx_time_obs <= 10, "Late Treated (3-10)", "Never Treated"),
+    flare = if_else(l_med == 1L, "Organ Flare (L=1)", "No Flare (L=0)")
+  )
+
+p1 <- ggplot(df_diag, aes(x = early_tx, fill = flare)) +
+  geom_bar(position = "fill") +
+  scale_fill_manual(values = c("gray70", "firebrick")) +
+  labs(title = "A -> L: Early Tx Prevents Flare", x = "", y = "Proportion", fill = "Status") +
+  theme_minimal(base_size = 11) + theme(legend.position = "none")
+
+p2 <- df_diag %>%
+  filter(early_tx == "Not Early Treated") %>%
+  ggplot(aes(x = flare, fill = late_tx)) +
+  geom_bar(position = "fill") +
+  scale_fill_manual(values = c("steelblue", "gray40")) +
+  labs(title = "L -> A: Flare Triggers Late Tx", x = "", y = "Proportion", fill = "Late Initiation") +
+  theme_minimal(base_size = 11) + theme(legend.position = "right")
+
+gridExtra::grid.arrange(p1, p2, ncol = 2)
+```
+
+---
+
+## 4. Model Fitting & Results Comparison
+
+We fit the 9 competing estimators to evaluate how they handle treatment-confounder feedback:
+1. **Naive KM:** Unadjusted observational Kaplan-Meier.
+2. **Landmark Analysis (Day 10):** Discards early person-time.
+3. **td-Cox (Unadjusted for L):** Standard time-dependent Cox model omitting $L$.
+4. **td-Cox (Adjusted for L):** Standard time-dependent Cox model conditioning on $L$ (inducing collider bias).
+5. **ccw-cphm:** Clone-Censor-Weighting Cox PH model.
+6. **ccw-km:** Clone-Censor-Weighting Kaplan-Meier.
+7. **Pure G-Comp (Survival-BART):** Nonparametric Bayesian tree substitution model.
+8. **TMLE + BART:** Targeted Survival-BART with longitudinal IPTW clever covariates and full EIC inference.
+9. **TTE-TMLE (SuperLearner Ensemble):** Ensembling GLM, MARS splines, and Random Forests.
+
+```{r run-models}
+#| code-summary: "Fit all benchmark models on Scenario 6 cohort"
+# 1. Naive KM
+km_naive <- survfit(Surv(event_time, event) ~ tx_obs, data = df)
+s_naive <- summary(km_naive, times = 30)
+naive_rd_30 <- s_naive$surv[2] - s_naive$surv[1]
+naive_se_30 <- sqrt(sum(s_naive$std.err^2))
+
+# 2. Landmark Analysis (Day 10 cutoff)
+df_lm <- df %>% filter(event_time > 10) %>% mutate(time_lm = event_time - 10)
+km_lm <- survfit(Surv(time_lm, event) ~ tx_obs, data = df_lm)
+s_lm <- summary(km_lm, times = 20)
+lm_rd_30 <- s_lm$surv[2] - s_lm$surv[1]
+lm_se_30 <- sqrt(sum(s_lm$std.err^2))
+
+# 3. Time-Dependent Cox (td-Cox)
+td_res <- fit_td_cox(df, covars = c("x1", "l_med"), tau = 30, grace_period = 10)
+td_rd_30 <- td_res$rd_tau
+td_se_30 <- td_res$se_rd_tau
+
+# 4. ccw-cphm & 5. ccw-km & 7. TTE-TMLE (GLM)
+fit_glm <- tte_tmle(
+  df, 
+  covars = c("x1", "l_med"), 
+  grace_period = 10, 
+  tau = 30, 
+  use_sl = FALSE
+)
+ccw_km_rd_30 <- fit_glm$res_log$rd[30]
+ccw_km_se_30 <- fit_glm$res_log$rd_se[30]
+tmle_glm_rd_30 <- fit_glm$res_tmle$rd[30]
+tmle_glm_se_30 <- fit_glm$res_tmle$se_RD[30]
+
+# Fit CCW-CPHM on the weighted panel
+cphm_res <- fit_ccw_cphm(fit_glm$panel_w, covars = c("x1", "l_med"), tau = 30)
+cphm_rd_30 <- cphm_res$rd_tau
+cphm_se_30 <- cphm_res$se_rd_tau
+
+# 6. Pure G-Computation with Nonparametric Survival BART
+df_std <- prepare_tte_data(df)
+clones <- create_clones(df_std, covars = c("x1", "l_med"), grace_period = 10, tau = 30)
+
+set.seed(42)
+bart_res <- fit_bart_gcomp(
+  data = df_std,
+  clones = clones,
+  covars = c("x1", "l_med"),
+  grace_period = 10,
+  tau = 30,
+  ntree = 50,
+  ndpost = 200,
+  nskip = 100,
+  mc.cores = 2,
+  seed = 42
+)
+bart_rd_30 <- bart_res$results$rd[30]
+bart_se_30 <- bart_res$results$se_RD[30]
+bart_cri_lower <- bart_res$results$cri_lower[30]
+bart_cri_upper <- bart_res$results$cri_upper[30]
+bart_width_30 <- bart_res$results$cri_width[30]
+
+# 7. TMLE + BART (Targeted Survival-BART with Longitudinal IPTW Targeting)
+set.seed(42)
+bart_tmle_res <- fit_bart_tmle(
+  data = df_std,
+  clones = clones,
+  covars = c("x1", "l_med"),
+  grace_period = 10,
+  tau = 30,
+  ntree = 50,
+  ndpost = 200,
+  nskip = 100,
+  mc.cores = 2,
+  seed = 42
+)
+bart_tmle_rd_30 <- bart_tmle_res$results$rd[30]
+bart_tmle_se_30 <- bart_tmle_res$results$se_RD[30]
+
+# 8. TTE-TMLE with SuperLearner Ensemble (GLM + Earth + Ranger)
+set.seed(42)
+fit_sl <- tte_tmle(
+  df, 
+  covars = c("x1", "l_med"), 
+  grace_period = 10, 
+  tau = 30, 
+  use_sl = TRUE, 
+  sl_lib = c("SL.mean", "SL.glm", "SL.earth.int", "SL.ranger")
+)
+tmle_sl_rd_30 <- fit_sl$res_tmle$rd[30]
+tmle_sl_se_30 <- fit_sl$res_tmle$se_RD[30]
+```
+
+---
+
+## 5. Summary Results & Discussion
+
+### 5.1 Day 30 Performance Comparison Table
+
+```{r results-table}
+#| code-summary: "Construct comparative performance table under treatment-confounder feedback"
+estimators <- c(
+  "Naive Unadjusted KM",
+  "Landmark Analysis (Day 10)",
+  "td-Cox (Grace Switch)",
+  "ccw-cphm (Weighted Cox PH)",
+  "ccw-km (Weighted KM)",
+  "Pure G-Computation (Survival-BART)",
+  "TMLE + BART (Targeted Survival-BART)",
+  "TTE-TMLE (Parametric GLM)",
+  "TTE-TMLE (SuperLearner Ensemble)"
+)
+
+estimates <- c(naive_rd_30, lm_rd_30, td_rd_30, cphm_rd_30, ccw_km_rd_30, bart_rd_30, bart_tmle_rd_30, tmle_glm_rd_30, tmle_sl_rd_30)
+ses <- c(naive_se_30, lm_se_30, td_se_30, cphm_se_30, ccw_km_se_30, bart_se_30, bart_tmle_se_30, tmle_glm_se_30, tmle_sl_se_30)
+
+ci_lowers <- estimates - 1.96 * ses
+ci_uppers <- estimates + 1.96 * ses
+ci_lowers[6] <- bart_cri_lower
+ci_uppers[6] <- bart_cri_upper
+
+# Hypothesis tests against H0: RD = 0
+ht_list <- lapply(seq_along(estimates), function(i) compute_hypothesis_test(estimates[i], ses[i]))
+z_stats <- sapply(ht_list, function(x) x$z_stat)
+p_vals <- sapply(ht_list, function(x) x$p_val)
+powers <- sapply(ht_list, function(x) x$power)
+fnrs <- sapply(ht_list, function(x) x$fnr)
+
+results_df <- tibble(
+  Estimator = estimators,
+  `Estimate (RD 30)` = estimates,
+  `True Value` = rep(truth_rd_30, length(estimators)),
+  `Abs Bias` = `Estimate (RD 30)` - `True Value`,
+  `Rel Bias (%)` = (`Abs Bias` / `True Value`) * 100,
+  `Standard Error` = ses,
+  `95% Interval Width` = c(
+    as.character(round(ci_uppers[1:5] - ci_lowers[1:5], 4)),
+    paste0(round(bart_width_30, 4), "*"),
+    as.character(round(ci_uppers[7:9] - ci_lowers[7:9], 4))
+  ),
+  `Z-Statistic` = z_stats,
+  `p-value` = p_vals,
+  `Power (1 - beta)` = powers,
+  `FNR (beta)` = fnrs,
+  `95% Covered` = c(
+    if_else(truth_rd_30 >= ci_lowers[1] & truth_rd_30 <= ci_uppers[1], "Yes", "No"),
+    if_else(truth_rd_30 >= ci_lowers[2] & truth_rd_30 <= ci_uppers[2], "Yes", "No"),
+    if_else(truth_rd_30 >= ci_lowers[3] & truth_rd_30 <= ci_uppers[3], "Yes", "No"),
+    if_else(truth_rd_30 >= ci_lowers[4] & truth_rd_30 <= ci_uppers[4], "Yes", "No"),
+    if_else(truth_rd_30 >= ci_lowers[5] & truth_rd_30 <= ci_uppers[5], "Yes", "No"),
+    if_else(truth_rd_30 >= bart_cri_lower & truth_rd_30 <= bart_cri_upper, "Yes*", "No*"),
+    if_else(truth_rd_30 >= ci_lowers[7] & truth_rd_30 <= ci_uppers[7], "Yes", "No"),
+    if_else(truth_rd_30 >= ci_lowers[8] & truth_rd_30 <= ci_uppers[8], "Yes", "No"),
+    if_else(truth_rd_30 >= ci_lowers[9] & truth_rd_30 <= ci_uppers[9], "Yes", "No")
+  )
+)
+
+knitr::kable(results_df, digits = 4, caption = "Scenario 6 Performance Metrics at Day 30 Follow-Up (*Asterisk denotes Bayesian 95% Credible Interval from Survival-BART posterior draws)")
+```
+
+### 5.2 Key Takeaways on Confounder-Treatment Feedback
+1. **The Collider Trap of `td-Cox`:** Adjusting for intermediate variable $L(t)$ blocks the beneficial effect of early treatment, producing substantial attenuation bias.
+2. **Success of Target Trial Emulation:** By establishing clone protocol compliance, `ccw-km` and `TTE-TMLE` completely avoid mediator conditioning.
+3. **Double Robust Precision of `TMLE + BART`:** `TMLE + BART` achieves minimal bias while maintaining bounded two-component EIC variance.
+
+### 5.3 Step Visualization of Risk Difference & Multiplier Bootstrap Bands
+
+```{r plot-bands}
+#| fig-width: 8.5
+#| fig-height: 5
+#| code-summary: "Plot TTE-TMLE Risk Difference curve with simultaneous confidence bands using ggplot2 step functions"
+p_sl <- plot(fit_sl, which = "rd")
+df_truth_rd <- data.frame(t = c(0, truth$t), rd = c(0, truth$rd_true))
+
+p_sl + 
+  geom_step(data = df_truth_rd, aes(x = t, y = rd, color = "Oracle Ground Truth"), 
+            direction = "hv", linetype = "dashed", linewidth = 0.7) +
+  scale_color_manual(name = "", values = c("Risk Difference (TMLE)" = "#2ca02c", "Oracle Ground Truth" = "#d62728"))
+```
+

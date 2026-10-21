@@ -125,8 +125,6 @@ fit_bart_gcomp <- function(data,
   cri_upper <- apply(rd_draws, 2, stats::quantile, probs = 0.975)
   
   # 6. Simultaneous Credible Band via Supremum of Posterior Deviations
-  # Orders posterior trajectory draws by maximum studentized deviation:
-  # exactly 95% of posterior sample paths lie entirely within [band_lower, band_upper]
   std_dev <- t(apply(rd_draws, 1, function(x) abs(x - mean_rd) / pmax(sd_rd, 1e-6)))
   sup_dev <- apply(std_dev, 1, max)
   crit_simul <- stats::quantile(sup_dev, probs = 0.95, names = FALSE)
@@ -156,14 +154,13 @@ fit_bart_gcomp <- function(data,
   ))
 }
 
-
-
 #' Targeted Minimum Loss-Based Estimation via Survival-BART (TMLE + BART)
 #'
 #' @description Fits a nonparametric Bayesian Additive Regression Trees (BART) model
 #'   for the initial outcome hazard Q, estimates longitudinal inverse probability of
-#'   censoring weights (IPCW), and executes targeted maximum likelihood fluctuation
-#'   to yield a doubly robust, locally efficient survival TMLE estimator.
+#'   censoring weights (IPCW), executes targeted maximum likelihood fluctuation
+#'   via clever covariates, and evaluates exact two-component Empirical Influence Curve (EIC)
+#'   standard errors and multiplier bootstrap confidence bands.
 #'
 #' @param data Raw standardized data frame.
 #' @param clones Cloned data frame produced by \code{\link{create_clones}}.
@@ -174,12 +171,14 @@ fit_bart_gcomp <- function(data,
 #' @param ndpost Number of posterior MCMC draws after burn-in (default 200).
 #' @param nskip Number of MCMC burn-in iterations (default 100).
 #' @param mc.cores Number of parallel computing cores (default 2).
+#' @param n_boot Multiplier bootstrap replicates (default 5000).
 #' @param seed Optional random seed.
 #'
 #' @return A list containing:
 #'   \describe{
-#'     \item{results}{Tibble containing targeted survival curves, risk difference, SE, and 95% CIs.}
+#'     \item{results}{Tibble containing targeted survival curves, risk difference, full EIC SE, pointwise CIs, and simultaneous bands.}
 #'     \item{eps}{Estimated TMLE fluctuation parameters.}
+#'     \item{crit_val_simul}{Multiplier bootstrap critical value for simultaneous coverage.}
 #'     \item{fit_bart}{Underlying \code{mc.surv.bart} object.}
 #'   }
 #' @export
@@ -194,6 +193,7 @@ fit_bart_tmle <- function(data,
                           ndpost = 200,
                           nskip = 100,
                           mc.cores = 2,
+                          n_boot = 5000,
                           seed = NULL) {
   
   if (!requireNamespace("BART", quietly = TRUE)) {
@@ -236,7 +236,6 @@ fit_bart_tmle <- function(data,
     dplyr::select(t, dplyr::all_of(covars), is_treated) %>%
     as.matrix()
   
-  # Combine training and counterfactual evaluation grids for single BART pass
   X_test_all <- rbind(X_train, cf_ctrl, cf_treat)
   
   # 4. Fit Nonparametric Survival BART
@@ -265,23 +264,25 @@ fit_bart_tmle <- function(data,
       Q_init_hazard = bound_precision(Q_init_train),
       Q_init_logit = stats::qlogis(Q_init_hazard),
       H_ctrl = dplyr::if_else(arm == "control_no_tx", w_trim, 0),
-      H_treat = dplyr::if_else(arm == "treat_tx", w_trim, 0)
+      H_treat_pre = dplyr::if_else(arm == "treat_tx" & t <= grace_period, w_trim, 0),
+      H_treat_post = dplyr::if_else(arm == "treat_tx" & t > grace_period, w_trim, 0)
     )
   
   m_fluc <- suppressWarnings(stats::glm(
-    event_cc_day ~ -1 + H_ctrl + H_treat + offset(Q_init_logit),
+    event_cc_day ~ -1 + H_ctrl + H_treat_pre + H_treat_post + offset(Q_init_logit),
     family = stats::binomial(),
     data = panel_fluc
   ))
   
   coefs <- stats::coef(m_fluc)
   eps_ctrl <- if ("H_ctrl" %in% names(coefs) && !is.na(coefs["H_ctrl"])) coefs["H_ctrl"] else 0
-  eps_treat <- if ("H_treat" %in% names(coefs) && !is.na(coefs["H_treat"])) coefs["H_treat"] else 0
+  eps_treat_pre <- if ("H_treat_pre" %in% names(coefs) && !is.na(coefs["H_treat_pre"])) coefs["H_treat_pre"] else 0
+  eps_treat_post <- if ("H_treat_post" %in% names(coefs) && !is.na(coefs["H_treat_post"])) coefs["H_treat_post"] else 0
   
   # 7. Update Counterfactual Hazards with Fluctuation
-  # For target trial marginalization, clever covariate on complier counterfactual target is 1
   Q_star_ctrl <- stats::plogis(stats::qlogis(bound_precision(Q_init_ctrl_cf)) + eps_ctrl * 1.0)
-  Q_star_treat <- stats::plogis(stats::qlogis(bound_precision(Q_init_treat_cf)) + eps_treat * 1.0)
+  Q_star_treat <- stats::plogis(stats::qlogis(bound_precision(Q_init_treat_cf)) + 
+    ifelse(cf_base$t <= grace_period, eps_treat_pre, eps_treat_post) * 1.0)
   
   # 8. Marginalize Across Patients: S(t) = 1/N sum_i prod_{s=1}^t (1 - Q*(s, a, W_i))
   n_patients <- nrow(data)
@@ -300,33 +301,40 @@ fit_bart_tmle <- function(data,
   mean_s1 <- rowMeans(S_mat_treat)
   mean_rd <- mean_s1 - mean_s0
   
-  # 9. Asymptotic Inference via Influence Curve
-  # Residual error from person-time observations
-  se_vec <- numeric(tau)
-  for (d in seq_len(tau)) {
-    # Delta method approximation combining variance of S1 and S0 across patients
-    v0 <- stats::var(S_mat_ctrl[d, ]) / n_patients
-    v1 <- stats::var(S_mat_treat[d, ]) / n_patients
-    se_vec[d] <- sqrt(v0 + v1)
-  }
+  # 9. Rigorous Full Two-Component Empirical Influence Curve (EIC) Inference
+  cf_ctrl_df <- cf_base %>% dplyr::mutate(arm = "control_no_tx", indiv_survival = as.vector(S_mat_ctrl))
+  cf_treat_df <- cf_base %>% dplyr::mutate(arm = "treat_tx", indiv_survival = as.vector(S_mat_treat))
+  cf_data <- dplyr::bind_rows(cf_ctrl_df, cf_treat_df)
   
-  ci_lower <- mean_rd - 1.96 * se_vec
-  ci_upper <- mean_rd + 1.96 * se_vec
-  
-  results <- tibble::tibble(
+  tmle_surv <- tibble::tibble(
+    t = rep(seq_len(tau), 2),
+    arm = c(rep("control_no_tx", tau), rep("treat_tx", tau)),
+    survival = c(mean_s0, mean_s1)
+  )
+  res_tmle <- tibble::tibble(
     t = seq_len(tau),
     control_no_tx = mean_s0,
     treat_tx = mean_s1,
-    rd = mean_rd,
-    se_RD = se_vec,
-    ci_lower = ci_lower,
-    ci_upper = ci_upper,
-    ci_width = ci_upper - ci_lower
+    rd = mean_rd
+  )
+  
+  inf_res <- compute_eic_inference(
+    panel_w = panel_fluc,
+    cf_data = cf_data,
+    tmle_surv = tmle_surv,
+    res_tmle = res_tmle,
+    eps_ctrl = eps_ctrl,
+    eps_treat_pre = eps_treat_pre,
+    eps_treat_post = eps_treat_post,
+    n_boot = n_boot,
+    alpha = 0.05,
+    seed = seed
   )
   
   return(list(
-    results = results,
-    eps = c(eps_ctrl = eps_ctrl, eps_treat = eps_treat),
+    results = inf_res$res_tmle,
+    eps = c(eps_ctrl = eps_ctrl, eps_treat_pre = eps_treat_pre, eps_treat_post = eps_treat_post),
+    crit_val_simul = inf_res$crit_val_simul,
     m_fluc = m_fluc,
     fit_bart = bart_fit
   ))

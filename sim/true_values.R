@@ -500,3 +500,227 @@ compute_scenario5_truth <- function(n_oracle = 100000,
   
   return(truth_df)
 }
+
+
+#' Ground Truth Counterfactual Value Generator for Scenario 6 (Confounder-Treatment Feedback)
+#'
+#' @description Computes exact counterfactual survival curves and causal estimands
+#'   under Scenario 6 with time-varying mediator/confounder feedback (N = 100,000).
+#'
+#' @param n_oracle Sample size for oracle population (default 100,000).
+#' @param tau Maximum follow-up horizon (default 30).
+#' @param grace_period Maximum treatment initiation delay in days (default 10).
+#' @param t_med Time of intermediate biomarker assessment (default 3).
+#' @param shape Weibull shape parameter (default 1.5).
+#' @param base_scale Baseline scale parameter (default 45).
+#' @param coef_w Confounder effect on baseline hazard (default 0.4).
+#' @param coef_l Intermediate biomarker effect on baseline hazard (default 0.8).
+#' @param hr_target Base treatment effect hazard ratio (default 0.35).
+#' @param seed Random seed for reproducibility.
+#'
+#' @return A tibble with columns t, S0_true, S1_true, rd_true, hr_true.
+#' @export
+compute_scenario6_truth <- function(n_oracle = 100000,
+                                    tau = 30,
+                                    grace_period = 10,
+                                    t_med = 3,
+                                    shape = 1.5,
+                                    base_scale = 45,
+                                    coef_w = 0.4,
+                                    coef_l = 0.8,
+                                    hr_target = 0.35,
+                                    seed = 99999) {
+  
+  if (!is.null(seed)) set.seed(seed)
+  
+  # 1. Baseline Confounder
+  x1 <- stats::rnorm(n_oracle, mean = 0, sd = 1)
+  
+  # Strategy 0: Never Treat (tx_early = 0, tx_late = 0)
+  prob_l_0 <- stats::plogis(-0.2 + 0.7 * x1)
+  l_med_0 <- stats::rbinom(n_oracle, 1, prob_l_0)
+  lin_pred_0 <- coef_w * x1 + coef_l * l_med_0
+  scale_0 <- base_scale * exp(- lin_pred_0 / shape)
+  
+  u0 <- stats::runif(n_oracle)
+  h_target0 <- -log(u0)
+  t_event_0 <- scale_0 * (h_target0)^(1 / shape)
+  
+  # Strategy 1: Treat within grace
+  # Complier initiation timing across grace window
+  t_switch_1 <- sample(1:grace_period, size = n_oracle, replace = TRUE)
+  tx_early_1 <- ifelse(t_switch_1 < t_med, 1L, 0L)
+  
+  prob_l_1 <- stats::plogis(-0.2 + 0.7 * x1 - 1.2 * tx_early_1)
+  l_med_1 <- stats::rbinom(n_oracle, 1, prob_l_1)
+  
+  lin_pred_1 <- coef_w * x1 + coef_l * l_med_1
+  scale_1_base <- base_scale * exp(- lin_pred_1 / shape)
+  scale_1_tx <- scale_1_base * (hr_target)^(-1 / shape)
+  
+  u1 <- stats::runif(n_oracle)
+  h_target1 <- -log(u1)
+  h_at_switch <- (t_switch_1 / scale_1_base)^shape
+  
+  t_event_1 <- ifelse(
+    h_target1 <= h_at_switch,
+    scale_1_base * (h_target1)^(1 / shape),
+    ((h_target1 - h_at_switch) * (scale_1_tx^shape) + (t_switch_1^shape))^(1 / shape)
+  )
+  
+  days <- seq_len(tau)
+  s0_vec <- numeric(tau)
+  s1_vec <- numeric(tau)
+  
+  for (d in days) {
+    s0_vec[d] <- mean(t_event_0 > d)
+    s1_vec[d] <- mean(t_event_1 > d)
+  }
+  
+  truth_df <- tibble::tibble(
+    t = days,
+    S0_true = s0_vec,
+    S1_true = s1_vec,
+    rd_true = s1_vec - s0_vec,
+    hr_true = log(pmax(s1_vec, 1e-6)) / log(pmax(s0_vec, 1e-6))
+  )
+  
+  return(truth_df)
+}
+
+#' Ground Truth Counterfactual Value Generator for Scenario 7 (Positivity Tail Depletion)
+#'
+#' @description Computes exact counterfactual survival curves and causal estimands
+#'   under Scenario 7 with tail sparsity and support depletion (N = 100,000).
+#'
+#' @param n_oracle Sample size for oracle population (default 100,000).
+#' @param tau Maximum follow-up horizon (default 30).
+#' @param grace_period Maximum treatment initiation delay in days (default 10).
+#' @param shape Weibull shape parameter (default 1.5).
+#' @param base_scale Baseline scale parameter (default 45).
+#' @param coef_w Confounder effect on baseline hazard (default 0.6).
+#' @param hr_target Base treatment effect hazard ratio (default 0.35).
+#' @param seed Random seed for reproducibility.
+#'
+#' @return A tibble with columns t, S0_true, S1_true, rd_true, hr_true.
+#' @export
+compute_scenario7_truth <- function(n_oracle = 100000,
+                                    tau = 30,
+                                    grace_period = 10,
+                                    shape = 1.5,
+                                    base_scale = 45,
+                                    coef_w = 0.6,
+                                    hr_target = 0.35,
+                                    seed = 99999) {
+  
+  if (!is.null(seed)) set.seed(seed)
+  
+  x1 <- stats::rnorm(n_oracle, mean = 0, sd = 1)
+  scale_0 <- base_scale * exp(- (coef_w * x1) / shape)
+  scale_t <- scale_0 * (hr_target)^(-1 / shape)
+  
+  u0 <- stats::runif(n_oracle)
+  h_target0 <- -log(u0)
+  t_event_0 <- scale_0 * (h_target0)^(1 / shape)
+  
+  t_switch_1 <- pmax(1, pmin(grace_period, round(stats::rbeta(n_oracle, 4, 2) * grace_period)))
+  u1 <- stats::runif(n_oracle)
+  h_target1 <- -log(u1)
+  h_at_switch <- (t_switch_1 / scale_0)^shape
+  
+  t_event_1 <- ifelse(
+    h_target1 <= h_at_switch,
+    scale_0 * (h_target1)^(1 / shape),
+    ((h_target1 - h_at_switch) * (scale_t^shape) + (t_switch_1^shape))^(1 / shape)
+  )
+  
+  days <- seq_len(tau)
+  s0_vec <- numeric(tau)
+  s1_vec <- numeric(tau)
+  
+  for (d in days) {
+    s0_vec[d] <- mean(t_event_0 > d)
+    s1_vec[d] <- mean(t_event_1 > d)
+  }
+  
+  truth_df <- tibble::tibble(
+    t = days,
+    S0_true = s0_vec,
+    S1_true = s1_vec,
+    rd_true = s1_vec - s0_vec,
+    hr_true = log(pmax(s1_vec, 1e-6)) / log(pmax(s0_vec, 1e-6))
+  )
+  
+  return(truth_df)
+}
+
+#' Ground Truth Counterfactual Value Generator for Scenario 8 (Depletion of Susceptibles)
+#'
+#' @description Computes exact counterfactual survival curves and causal estimands
+#'   under Scenario 8 with unmeasured frailty and depletion of susceptibles (N = 100,000).
+#'
+#' @param n_oracle Sample size for oracle population (default 100,000).
+#' @param tau Maximum follow-up horizon (default 30).
+#' @param grace_period Maximum treatment initiation delay in days (default 10).
+#' @param shape Weibull shape parameter (default 1.5).
+#' @param base_scale Baseline scale parameter (default 45).
+#' @param coef_w Confounder effect on baseline hazard (default 0.4).
+#' @param frailty_var Variance of unmeasured frailty (default 0.6).
+#' @param hr_target Base treatment effect hazard ratio (default 0.35).
+#' @param seed Random seed for reproducibility.
+#'
+#' @return A tibble with columns t, S0_true, S1_true, rd_true, hr_true.
+#' @export
+compute_scenario8_truth <- function(n_oracle = 100000,
+                                    tau = 30,
+                                    grace_period = 10,
+                                    shape = 1.5,
+                                    base_scale = 45,
+                                    coef_w = 0.4,
+                                    frailty_var = 0.6,
+                                    hr_target = 0.35,
+                                    seed = 99999) {
+  
+  if (!is.null(seed)) set.seed(seed)
+  
+  x1 <- stats::rnorm(n_oracle, mean = 0, sd = 1)
+  k_shape <- 1 / frailty_var
+  u_frailty <- stats::rgamma(n_oracle, shape = k_shape, scale = frailty_var)
+  
+  scale_0 <- (base_scale * exp(- (coef_w * x1) / shape)) * (u_frailty)^(-1 / shape)
+  scale_t <- scale_0 * (hr_target)^(-1 / shape)
+  
+  u0 <- stats::runif(n_oracle)
+  h_target0 <- -log(u0)
+  t_event_0 <- scale_0 * (h_target0)^(1 / shape)
+  
+  t_switch_1 <- pmax(1, pmin(grace_period, round(stats::rbeta(n_oracle, 4, 2) * grace_period)))
+  u1 <- stats::runif(n_oracle)
+  h_target1 <- -log(u1)
+  h_at_switch <- (t_switch_1 / scale_0)^shape
+  
+  t_event_1 <- ifelse(
+    h_target1 <= h_at_switch,
+    scale_0 * (h_target1)^(1 / shape),
+    ((h_target1 - h_at_switch) * (scale_t^shape) + (t_switch_1^shape))^(1 / shape)
+  )
+  
+  days <- seq_len(tau)
+  s0_vec <- numeric(tau)
+  s1_vec <- numeric(tau)
+  
+  for (d in days) {
+    s0_vec[d] <- mean(t_event_0 > d)
+    s1_vec[d] <- mean(t_event_1 > d)
+  }
+  
+  truth_df <- tibble::tibble(
+    t = days,
+    S0_true = s0_vec,
+    S1_true = s1_vec,
+    rd_true = s1_vec - s0_vec,
+    hr_true = log(pmax(s1_vec, 1e-6)) / log(pmax(s0_vec, 1e-6))
+  )
+  
+  return(truth_df)
+}
