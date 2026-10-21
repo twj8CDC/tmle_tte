@@ -1,0 +1,281 @@
+#' Target Trial Emulation via Time-to-Event TMLE (TTE-TMLE)
+#'
+#' @description End-to-end implementation of Target Trial Emulation combined with Survival
+#'   Targeted Minimum Loss-Based Estimation (TMLE). Addresses immortal time bias across dynamic
+#'   treatment grace periods, incorporates machine learning via \code{SuperLearner}, calculates
+#'   patient-clustered Empirical Influence Curve (EIC) standard errors, and constructs
+#'   simultaneous confidence bands via the Multiplier Bootstrap.
+#'
+#' @param data A data.frame containing observational survival data. Must contain variables for
+#'   individual ID, observed event time, event indicator, treatment indicator, and treatment initiation time.
+#' @param grace_period Numeric grace period duration for treatment initiation strategy (default 10).
+#' @param tau Follow-up time horizon (default 30).
+#' @param covars Character vector of baseline covariate column names (default \code{c("x1")}).
+#' @param p_form Optional formula string for compliance/propensity models.
+#' @param q_form Optional formula string for outcome hazard models.
+#' @param dt Discrete time interval step size (default 1).
+#' @param use_sl Logical indicating whether to use \code{SuperLearner} for nuisance models.
+#' @param sl_lib Character vector of SuperLearner learners (default \code{c("SL.mean", "SL.glm", "SL.earth.int", "SL.ranger")}).
+#' @param trim_quantile Numeric vector of length 2 specifying quantiles for IPCW trimming (default \code{c(0.01, 0.99)}).
+#' @param n_boot Number of multiplier bootstrap iterations for simultaneous confidence bands (default 10,000).
+#' @param alpha Significance level for intervals and bands (default 0.05).
+#' @param pure_gcomp Logical. If \code{TRUE}, evaluates pure counterfactual G-computation without the TMLE targeting update.
+#' @param seed Optional random seed.
+#' @param id_col Column name for individual ID (default \code{"id"}).
+#' @param time_col Column name for follow-up time (default \code{"event_time"}).
+#' @param event_col Column name for event indicator (default \code{"event"}).
+#' @param tx_col Column name for treatment ever indicator (default \code{"tx_obs"}).
+#' @param tx_time_col Column name for treatment initiation time (default \code{"tx_time_obs"}).
+#'
+#' @return An object of class \code{"tte_tmle"} containing:
+#'   \describe{
+#'     \item{res_tmle}{Tibble containing marginal survival for both arms, risk difference, pointwise CIs, and simultaneous confidence bands.}
+#'     \item{res_log}{Tibble containing standard Inverse Probability Weighted Kaplan-Meier estimates for comparison.}
+#'     \item{fit_ccw}{Survfit object for the weighted CCW Kaplan-Meier.}
+#'     \item{crit_val_simul}{Multiplier bootstrap critical value for simultaneous bands.}
+#'     \item{eps}{Estimated targeting coefficients.}
+#'     \item{data}{Processed longitudinal person-time data.}
+#'   }
+#' @export
+#' @importFrom dplyr mutate select left_join
+#' @importFrom tibble as_tibble
+#' @importFrom stats qnorm
+tte_tmle <- function(data,
+                     grace_period = 10,
+                     tau = 30,
+                     covars = c("x1"),
+                     p_form = NULL,
+                     q_form = NULL,
+                     dt = 1,
+                     use_sl = FALSE,
+                     sl_lib = c("SL.mean", "SL.glm", "SL.earth.int", "SL.ranger"),
+                     trim_quantile = c(0.01, 0.99),
+                     n_boot = 10000,
+                     alpha = 0.05,
+                     pure_gcomp = FALSE,
+                     seed = NULL,
+                     id_col = "id",
+                     time_col = "event_time",
+                     event_col = "event",
+                     tx_col = "tx_obs",
+                     tx_time_col = "tx_time_obs") {
+  
+  # Standardize column mapping
+  data_clean <- prepare_tte_data(
+    data, 
+    id_col = id_col, 
+    time_col = time_col, 
+    event_col = event_col, 
+    tx_col = tx_col, 
+    tx_time_col = tx_time_col
+  )
+  
+  # Step 1: Clone Creation & Protocol Censoring
+  clones <- create_clones(
+    data = data_clean, 
+    covars = covars, 
+    grace_period = grace_period, 
+    tau = tau
+  )
+  
+  # Step 2: Fit IPCW Models & Apply Weights
+  ipcw_res <- compute_ipcw_weights(
+    clones = clones,
+    covars = covars,
+    grace_period = grace_period,
+    dt = dt,
+    p_form = p_form,
+    use_sl = use_sl,
+    sl_lib = sl_lib,
+    trim_quantile = trim_quantile
+  )
+  
+  panel_w <- ipcw_res$panel_w
+  
+  # Step 3: Fit Stratified Initial Hazard Models (Q-models)
+  q_res <- fit_q_models(
+    panel_w = panel_w,
+    covars = covars,
+    q_form = q_form,
+    use_sl = use_sl,
+    sl_lib = sl_lib
+  )
+  
+  # Step 4: TMLE Fluctuation / Targeting Step
+  if (pure_gcomp) {
+    panel_w <- panel_w %>%
+      dplyr::mutate(
+        Q_init_hazard = bound_precision(q_res$pred_Q_init),
+        Q_init_logit = stats::qlogis(Q_init_hazard),
+        H_ctrl = dplyr::if_else(arm == "control_no_tx", w_trim, 0),
+        H_treat_pre = dplyr::if_else(arm == "treat_tx" & t <= grace_period, w_trim, 0),
+        H_treat_post = dplyr::if_else(arm == "treat_tx" & t > grace_period, w_trim, 0)
+      )
+    eps_ctrl <- 0
+    eps_treat_pre <- 0
+    eps_treat_post <- 0
+    targ_res <- list(panel_w = panel_w, eps_ctrl = 0, eps_treat_pre = 0, eps_treat_post = 0)
+  } else {
+    targ_res <- target_hazard(
+      panel_w = panel_w,
+      pred_Q_init = q_res$pred_Q_init,
+      grace_period = grace_period
+    )
+    eps_ctrl <- targ_res$eps_ctrl
+    eps_treat_pre <- targ_res$eps_treat_pre
+    eps_treat_post <- targ_res$eps_treat_post
+  }
+  
+  # Step 5: Counterfactual G-Computation Marginalization
+  gcomp_res <- marginalize_gcomp(
+    data = data_clean,
+    clones = clones,
+    m_Q_ctrl = q_res$m_Q_ctrl,
+    m_Q_treat = q_res$m_Q_treat,
+    m_denom_ctrl = ipcw_res$m_denom_ctrl,
+    m_denom_treat = ipcw_res$m_denom_treat,
+    m_num_ctrl = ipcw_res$m_num_ctrl,
+    m_num_treat = ipcw_res$m_num_treat,
+    eps_ctrl = eps_ctrl,
+    eps_treat_pre = eps_treat_pre,
+    eps_treat_post = eps_treat_post,
+    grace_period = grace_period,
+    tau = tau,
+    covars = covars,
+    q_lim = ipcw_res$q_lim,
+    use_sl = use_sl,
+    do_targeting = !pure_gcomp
+  )
+  
+  # Step 6: Empirical Influence Curve & Multiplier Bootstrap Inference
+  inf_res <- compute_eic_inference(
+    panel_w = targ_res$panel_w,
+    cf_data = gcomp_res$cf_data,
+    tmle_surv = gcomp_res$tmle_surv,
+    res_tmle = gcomp_res$res_tmle,
+    eps_ctrl = eps_ctrl,
+    eps_treat_pre = eps_treat_pre,
+    eps_treat_post = eps_treat_post,
+    n_boot = n_boot,
+    alpha = alpha,
+    seed = seed
+  )
+  
+  # Step 7: Standard CCW Weighted KM Comparison
+  sum_log <- summary(ipcw_res$fit_ccw, times = 1:tau, extend = TRUE)
+  res_log <- tibble::tibble(
+    t = sum_log$time, 
+    tx = sum_log$strata, 
+    sv = sum_log$surv,
+    se = sum_log$std.err
+  ) %>%
+    dplyr::mutate(tx = gsub("^arm=", "", tx)) %>% 
+    tidyr::pivot_wider(names_from = tx, values_from = c(sv, se)) %>% 
+    dplyr::mutate(
+      rd = sv_treat_tx - sv_control_no_tx,
+      rd_se = sqrt(se_control_no_tx^2 + se_treat_tx^2),
+      ci_lower = rd - stats::qnorm(1 - alpha / 2) * rd_se,
+      ci_upper = rd + stats::qnorm(1 - alpha / 2) * rd_se
+    )
+  
+  out <- list(
+    res_tmle = inf_res$res_tmle,
+    res_log = res_log,
+    fit_ccw = ipcw_res$fit_ccw,
+    crit_val_simul = inf_res$crit_val_simul,
+    crit_val_pointwise = inf_res$crit_val_pointwise,
+    eps = c(eps_ctrl = eps_ctrl, eps_treat_pre = eps_treat_pre, eps_treat_post = eps_treat_post),
+    eic_summary = inf_res$eic_summary,
+    data = panel_w,
+    params = list(
+      grace_period = grace_period,
+      tau = tau,
+      alpha = alpha,
+      use_sl = use_sl,
+      pure_gcomp = pure_gcomp
+    )
+  )
+  
+  class(out) <- "tte_tmle"
+  return(out)
+}
+
+#' Backwards compatibility alias for run_ccw_tmle_analysis
+#' @export
+run_ccw_tmle_analysis <- tte_tmle
+
+#' Print method for tte_tmle
+#' @export
+print.tte_tmle <- function(x, ...) {
+  cat("Target Trial Emulation via Time-to-Event TMLE (TTE-TMLE)\n")
+  cat("--------------------------------------------------------\n")
+  cat("Follow-up Horizon (tau):", x$params$tau, "\n")
+  cat("Grace Period:", x$params$grace_period, "\n")
+  cat("Targeting Mode:", if (x$params$pure_gcomp) "Pure G-computation (Untargeted)" else "TMLE (Targeted)", "\n")
+  cat("Multiplier Bootstrap Critical Value (95% Band):", round(x$crit_val_simul, 3), "\n\n")
+  
+  times_to_show <- c(min(x$params$grace_period, x$params$tau), 
+                     round(x$params$tau / 2), 
+                     x$params$tau)
+  times_to_show <- unique(pmin(times_to_show, x$params$tau))
+  
+  cat("Primary Estimand: Marginal Risk Difference (RD = Treat - Control)\n")
+  sub_rd <- x$res_tmle %>% 
+    dplyr::filter(t %in% times_to_show) %>%
+    dplyr::select(t, control_no_tx, treat_tx, rd, se_RD, rd_ci_lower, rd_ci_upper, rd_band_lower, rd_band_upper)
+  print(as.data.frame(sub_rd), digits = 4, row.names = FALSE)
+  
+  cat("\nSecondary Derivative: Cumulative Hazard Ratio (Delta Method)\n")
+  sub_hr <- x$res_tmle %>%
+    dplyr::filter(t %in% times_to_show) %>%
+    dplyr::select(t, hr_cum, hr_ci_lower, hr_ci_upper, hr_band_lower, hr_band_upper, hr_daily)
+  print(as.data.frame(sub_hr), digits = 4, row.names = FALSE)
+  
+  invisible(x)
+}
+
+#' Plot method for tte_tmle
+#' @export
+plot.tte_tmle <- function(x, which = c("survival", "rd", "hr"), ...) {
+  which <- match.arg(which)
+  
+  if (which == "survival") {
+    matplot(x$res_tmle$t, cbind(x$res_tmle$treat_tx, x$res_tmle$control_no_tx),
+            type = "l", lty = c(1, 2), lwd = 2, col = c("blue", "red"),
+            xlab = "Time (days)", ylab = "Marginal Survival Probability",
+            main = "TTE-TMLE Marginal Survival Curves", ...)
+    legend("bottomleft", legend = c("Treat Arm (Initiate <= Grace)", "Control Arm (Never Treat)"),
+           col = c("blue", "red"), lty = c(1, 2), lwd = 2)
+    grid()
+  } else if (which == "rd") {
+    plot(x$res_tmle$t, x$res_tmle$rd, type = "l", lwd = 2, col = "purple",
+         ylim = range(c(x$res_tmle$rd_band_lower, x$res_tmle$rd_band_upper), na.rm = TRUE),
+         xlab = "Time (days)", ylab = "Marginal Risk Difference (Treat - Control)",
+         main = "TTE-TMLE Marginal Risk Difference & Simultaneous Bands", ...)
+    lines(x$res_tmle$t, x$res_tmle$rd_ci_lower, lty = 2, col = "darkgray")
+    lines(x$res_tmle$t, x$res_tmle$rd_ci_upper, lty = 2, col = "darkgray")
+    lines(x$res_tmle$t, x$res_tmle$rd_band_lower, lty = 3, col = "black", lwd = 1.5)
+    lines(x$res_tmle$t, x$res_tmle$rd_band_upper, lty = 3, col = "black", lwd = 1.5)
+    abline(h = 0, lty = 2, col = "red")
+    legend("topright", legend = c("Risk Difference", "95% Pointwise CI", "95% Simultaneous Band"),
+           col = c("purple", "darkgray", "black"), lty = c(1, 2, 3), lwd = c(2, 1, 1.5))
+    grid()
+  } else if (which == "hr") {
+    y_vals <- c(x$res_tmle$hr_band_lower, x$res_tmle$hr_band_upper, x$res_tmle$hr_cum)
+    y_vals <- y_vals[is.finite(y_vals) & y_vals > 0]
+    y_lim <- if (length(y_vals) > 0) range(pmin(pmax(y_vals, 0.05), 20)) else c(0.1, 5)
+    
+    plot(x$res_tmle$t, x$res_tmle$hr_cum, type = "l", lwd = 2, col = "darkgreen", log = "y",
+         ylim = y_lim,
+         xlab = "Time (days)", ylab = "Cumulative Hazard Ratio (Log Scale)",
+         main = "TTE-TMLE Cumulative Hazard Ratio & Simultaneous Bands", ...)
+    lines(x$res_tmle$t, x$res_tmle$hr_ci_lower, lty = 2, col = "darkgray")
+    lines(x$res_tmle$t, x$res_tmle$hr_ci_upper, lty = 2, col = "darkgray")
+    lines(x$res_tmle$t, x$res_tmle$hr_band_lower, lty = 3, col = "black", lwd = 1.5)
+    lines(x$res_tmle$t, x$res_tmle$hr_band_upper, lty = 3, col = "black", lwd = 1.5)
+    abline(h = 1, lty = 2, col = "red")
+    legend("topright", legend = c("Cumulative HR", "95% Pointwise CI", "95% Simultaneous Band", "Null HR = 1"),
+           col = c("darkgreen", "darkgray", "black", "red"), lty = c(1, 2, 3, 2), lwd = c(2, 1, 1.5, 1))
+    grid()
+  }
+}

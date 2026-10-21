@@ -1,0 +1,12 @@
+# History and workspace files
+.Rhistory
+.RData
+.Ruserdata
+.Rproj.user/
+*.Rproj
+
+# OS files
+.DS_Store
+
+# Build artifacts
+*.tar.gz

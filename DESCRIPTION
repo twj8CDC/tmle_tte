@@ -1,0 +1,27 @@
+Package: ttetmle
+Title: Target Trial Emulation via Time-to-Event Targeted Minimum Loss-Based Estimation
+Version: 0.1.0
+Authors@R: person("Jacob", "Tiegs", email = "jacobtiegs@example.com", role = c("aut", "cre"))
+Description: Implements Clone-Censor-Weighting (CCW) integrated with Survival
+    Targeted Minimum Loss-Based Estimation (TMLE) for dynamic treatment regimes
+    and immortal time bias resolution in observational time-to-event data.
+    Provides stratified hazard estimation via SuperLearner, decoupled clever
+    covariates, patient-level Empirical Influence Curve (EIC) variance, and
+    simultaneous confidence bands via the multiplier bootstrap.
+License: MIT + file LICENSE
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.3
+Depends:
+    R (>= 4.0.0)
+Imports:
+    dplyr,
+    tidyr,
+    survival,
+    stats,
+    rlang,
+    tibble
+Suggests:
+    SuperLearner,
+    earth,
+    ranger

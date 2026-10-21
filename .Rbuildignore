@@ -1,0 +1,11 @@
+^.*\.Rproj$
+^\.Rproj\.user$
+^notes$
+^old$
+^sim$
+^applied$
+^docs$
+^tests$
+^.*\.tar\.gz$
+^PROJECT_PLAN\.md$
+^\.DS_Store$
