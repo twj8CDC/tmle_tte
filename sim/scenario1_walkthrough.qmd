@@ -1,0 +1,394 @@
+---
+title: "Scenario 1 Walkthrough: TTE-TMLE Pedagogical Guide"
+subtitle: "A Single-Iteration Step-by-Step Narrative from Raw Data to Debiased Causal Inference"
+author: "Jacob Tiegs"
+date: "October 2026"
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    code-fold: show
+    code-tools: true
+    theme: cosmo
+    embed-resources: true
+execute:
+  warning: false
+  message: false
+---
+
+## 1. Introduction & Scientific Setting
+
+In observational time-to-event research, treatments are rarely administered instantly at baseline. In clinical practice, treatments are often initiated across a **grace period** (e.g., initiating surgery within 6 months, or initiating a medication within 10 days of diagnosis).
+
+When researchers evaluate such treatments naively by comparing anyone who "ever took treatment" versus "never took treatment," they commit **Immortal Time Bias (ITB)**. Patients who take treatment on Day 7 were required to survive until Day 7 to receive it; crediting those 7 days of survival to the drug artificially inflates its benefit.
+
+This single-iteration walkthrough walks step-by-step through **TTE-TMLE** (*Target Trial Emulation via Time-to-Event Targeted Minimum Loss-Based Estimation*), showing how it mathematically un-biases the observational data, absorbs prognostic variation, and calculates simultaneous confidence bands.
+
+```{r setup}
+#| code-summary: "Load required packages and project modules"
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(tidyr)
+  library(survival)
+  library(ggplot2)
+  library(tibble)
+})
+
+# Source our modular ttetmle package functions
+source("../R/00_utils.R")
+source("../R/01_cloning.R")
+source("../R/02_ipcw_models.R")
+source("../R/03_q_models.R")
+source("../R/04_targeting.R")
+source("../R/05_gcomp.R")
+source("../R/06_inference.R")
+source("../R/07_tte_tmle.R")
+source("../R/08_benchmarks.R")
+
+# Source simulation tools
+source("true_values.R")
+source("dgp/01_dgp_structural_baseline.R")
+```
+
+---
+
+## 2. Generating One Observational Dataset
+
+We simulate a single observational clinical cohort of $N = 500$ patients over a 30-day follow-up window ($\tau = 30$). A 10-day grace period ($t_g = 10$) applies for the treatment strategy.
+
+```{r dgp}
+#| code-summary: "Generate observational data and oracle truth"
+set.seed(42)
+
+N <- 500
+TAU <- 30
+GRACE <- 10
+
+# Generate 1 observational dataset
+dat_obs <- generate_scenario1_data(
+  n = N,
+  tau = TAU,
+  grace_period = GRACE,
+  seed = 42
+) %>%
+  dplyr::mutate(time = event_time, tx_ever = tx_obs)
+
+# Compute the Oracle Truth (Monte Carlo N = 100,000)
+truth <- compute_scenario1_truth(
+  n_oracle = 100000,
+  tau = TAU,
+  grace_period = GRACE,
+  seed = 9999
+)
+
+glimpse(dat_obs)
+```
+
+### Visualizing the Raw Observational Data
+Let's inspect the first 25 patients to see the messy real-world delay in treatment initiation:
+
+```{r plot-raw}
+#| code-summary: "Plot timeline of raw observations"
+sample_pts <- dat_obs %>% slice(1:25)
+
+ggplot(sample_pts, aes(y = factor(id))) +
+  geom_segment(aes(x = 0, xend = time, yend = factor(id)), color = "gray60", linewidth = 1) +
+  geom_point(data = sample_pts %>% filter(tx_obs == 1 & tx_time_obs <= TAU),
+             aes(x = tx_time_obs), color = "blue", size = 3, shape = 17) +
+  geom_point(data = sample_pts %>% filter(event == 1),
+             aes(x = time), color = "red", size = 3, shape = 4) +
+  geom_vline(xintercept = GRACE, linetype = "dashed", color = "darkgreen") +
+  labs(
+    title = "Raw Patient Timelines (First 25 Patients)",
+    subtitle = "Triangles = Treatment Initiation | Crosses = Death | Dashed Line = Grace Period (Day 10)",
+    x = "Follow-up Day", y = "Patient ID"
+  ) +
+  theme_minimal()
+```
+
+---
+
+## 3. Step 1: Target Trial Emulation (Cloning & Protocol Censoring)
+
+To prevent immortal time bias, we create a hypothetical target trial at Day 0:
+1. **Arm 1 (Treat):** Initiate treatment within the 10-day grace period ($T_{\text{switch}} \le 10$).
+2. **Arm 0 (Control):** Never initiate treatment ($T_{\text{switch}} = \infty$).
+
+At baseline, we do not know who will comply, so we **clone every patient into both arms** ($2N$ rows). If a clone deviates from their assigned protocol, they are **artificially censored** ($C^*$):
+- In `control_no_tx`: Deviates the instant they take the drug $\implies C^* = T_{\text{switch}} - 1$.
+- In `treat_tx`: Deviates if they reach Day 10 without taking the drug $\implies C^* = 10$.
+
+```{r step1-cloning}
+#| code-summary: "Create clones and assign artificial censoring"
+clones <- create_clones(
+  data = prepare_tte_data(dat_obs),
+  covars = c("x1"),
+  grace_period = GRACE,
+  tau = TAU
+)
+
+# Inspect Patient #1 in both arms
+clones %>% 
+  filter(id == 1) %>% 
+  select(id, arm, tx_ever, t_switch, time, dev_time, time_cc, event_cc)
+```
+
+Notice how Patient #1 was duplicated into both arms:
+- In `control_no_tx`, their deviation time is calculated, and follow-up `time_cc` stops before treatment.
+- In `treat_tx`, they are permitted to initiate up through Day 10 without penalty!
+
+---
+
+## 4. Step 2: The Compliance & IPCW Model ($g$-model)
+
+Because artificial censoring eliminates non-compliant person-time, we must reweight the remaining compliant person-time to prevent selection bias.
+
+We fit daily compliance models on observational person-time:
+$$\text{logit}\,P(\text{Initiate at } t \mid \text{Alive, Untreated at } t-1, W)$$
+
+```{r step2-ipcw}
+#| code-summary: "Fit IPCW compliance models and expand panel"
+ipcw_res <- compute_ipcw_weights(
+  clones = clones,
+  covars = c("x1"),
+  grace_period = GRACE,
+  dt = 1
+)
+
+panel_w <- ipcw_res$panel_w
+
+# Summary of stabilized weights
+summary(panel_w$w_trim)
+
+# Distribution of weights
+ggplot(panel_w, aes(x = w_trim, fill = arm)) +
+  geom_density(alpha = 0.5) +
+  scale_x_log10() +
+  labs(
+    title = "Distribution of Stabilized IPCW Weights by Protocol Arm",
+    x = "Stabilized Weight (Log Scale)", y = "Density"
+  ) +
+  theme_minimal()
+```
+
+---
+
+## 5. Step 3: Stratified Initial Outcome Hazard Model ($Q$-model)
+
+Standard CCW uses weighted Kaplan-Meier, which is **singly robust**—if the weights are misspecified, the estimate fails.
+
+TMLE introduces a safety net: the **outcome hazard model ($Q$)**. We fit discrete-time logistic hazard models stratified by arm:
+$$Q_a(t, W) = P(T = t \mid T \ge t, A = a, W)$$
+
+Notice that in `control_no_tx`, `is_treated` is identically 0 by design (protocol censoring removes treated person-time). Stratifying prevents model collinearity.
+
+```{r step3-qmodel}
+#| code-summary: "Fit stratified initial hazard models"
+q_res <- fit_q_models(
+  panel_w = panel_w,
+  covars = c("x1"),
+  use_sl = FALSE
+)
+
+# Display fitted coefficients for treatment arm
+summary(q_res$m_Q_treat)$coefficients
+```
+
+---
+
+## 6. Step 4: Decoupled Targeting Step ($\epsilon$)
+
+The initial hazard predictions from the $Q$-model may be biased. TMLE removes this residual confounding through the **clever covariate fluctuation regression**:
+$$\text{logit}(Q^*(t)) = \text{logit}(Q(t)) + \epsilon_{\text{ctrl}} H_{\text{ctrl}} + \epsilon_{\text{treat,pre}} H_{\text{treat,pre}} + \epsilon_{\text{treat,post}} H_{\text{treat,post}}$$
+
+By decoupling into three time-and-arm windows, we prevent the structural dropout cliff at Day 11 from bleeding into pre-grace period predictions.
+
+```{r step4-targeting}
+#| code-summary: "Run TMLE logistic fluctuation"
+targ_res <- target_hazard(
+  panel_w = panel_w,
+  pred_Q_init = q_res$pred_Q_init,
+  grace_period = GRACE
+)
+
+cat("Estimated Fluctuation Coefficients (Epsilon):\n")
+cat("  Eps Control:        ", targ_res$eps_ctrl, "\n")
+cat("  Eps Treat (Pre-10): ", targ_res$eps_treat_pre, "\n")
+cat("  Eps Treat (Post-10):", targ_res$eps_treat_post, "\n")
+```
+
+---
+
+## 7. Step 5: Counterfactual G-Computation ("Ghost Population")
+
+Now we marginalize across the target population:
+1. We create a counterfactual dataset where every patient is assigned to Strategy 1 and Strategy 0.
+2. We update the baseline hazards using the targeted fluctuation coefficients ($\epsilon$).
+3. We compute individual cumulative survival curves:
+   $$S_i(t \mid A=a) = \prod_{u=1}^t (1 - Q^*_i(u \mid a))$$
+4. We average across all $N$ patients to obtain the marginal survival curves $S_1(t)$ and $S_0(t)$ and Risk Difference $\Psi_{\text{RD}}(t) = S_1(t) - S_0(t)$.
+
+```{r step5-gcomp}
+#| code-summary: "Generate counterfactual marginal survival curves"
+gcomp_res <- marginalize_gcomp(
+  data = prepare_tte_data(dat_obs),
+  clones = clones,
+  m_Q_ctrl = q_res$m_Q_ctrl,
+  m_Q_treat = q_res$m_Q_treat,
+  m_denom_ctrl = ipcw_res$m_denom_ctrl,
+  m_denom_treat = ipcw_res$m_denom_treat,
+  m_num_ctrl = ipcw_res$m_num_ctrl,
+  m_num_treat = ipcw_res$m_num_treat,
+  eps_ctrl = targ_res$eps_ctrl,
+  eps_treat_pre = targ_res$eps_treat_pre,
+  eps_treat_post = targ_res$eps_treat_post,
+  grace_period = GRACE,
+  tau = TAU,
+  covars = c("x1"),
+  q_lim = ipcw_res$q_lim,
+  do_targeting = TRUE
+)
+
+# Preview marginal curves
+head(gcomp_res$res_tmle, 10)
+```
+
+---
+
+## 8. Step 6: Empirical Influence Curve & Multiplier Bootstrap
+
+Because cloning duplicates each individual, standard variance formulas fail. 
+
+TTE-TMLE groups the Empirical Influence Curve (EIC) at the **patient ID level ($N$ real units)**:
+$$\text{IC}_{\text{RD}, i}(t) = \text{IC}_{1, i}(t) - \text{IC}_{0, i}(t)$$
+
+We then run the **Multiplier Bootstrap**:
+- Simulates $M = 10,000$ Gaussian process draws from the individual EIC trajectories.
+- Finds the supremum error over the 30-day timeline to produce simultaneous critical values ($c_{1-\alpha} \approx 2.8$) for **simultaneous confidence bands**!
+
+```{r step6-inference}
+#| code-summary: "Compute EIC standard errors and simultaneous bands"
+inf_res <- compute_eic_inference(
+  panel_w = targ_res$panel_w,
+  cf_data = gcomp_res$cf_data,
+  tmle_surv = gcomp_res$tmle_surv,
+  res_tmle = gcomp_res$res_tmle,
+  eps_ctrl = targ_res$eps_ctrl,
+  eps_treat_pre = targ_res$eps_treat_pre,
+  eps_treat_post = targ_res$eps_treat_post,
+  n_boot = 5000,
+  alpha = 0.05,
+  seed = 123
+)
+
+cat("Simultaneous Band Critical Value:", round(inf_res$crit_val_simul, 3), "\n")
+cat("Pointwise CI Critical Value:     ", round(inf_res$crit_val_pointwise, 3), "\n")
+```
+
+---
+
+## 9. Visualizing the Causal Trajectories
+
+Let's plot the marginal survival curves and the risk difference corridor against the true oracle benchmark:
+
+```{r plot-tmle}
+#| code-summary: "Plot marginal survival curves and risk difference with bands"
+res_plot <- inf_res$res_tmle %>%
+  left_join(truth %>% select(t, rd_truth = rd_true, S0_truth = S0_true, S1_truth = S1_true), by = "t")
+
+# Plot 1: Marginal Survival Curves
+ggplot(res_plot, aes(x = t)) +
+  geom_line(aes(y = treat_tx, color = "Treated (TTE-TMLE)"), linewidth = 1.2) +
+  geom_line(aes(y = control_no_tx, color = "Control (TTE-TMLE)"), linewidth = 1.2, linetype = "dashed") +
+  geom_line(aes(y = S1_truth, color = "True S1 (Oracle)"), linetype = "dotted", linewidth = 1) +
+  geom_line(aes(y = S0_truth, color = "True S0 (Oracle)"), linetype = "dotted", linewidth = 1) +
+  scale_color_manual(values = c("Treated (TTE-TMLE)" = "blue", "Control (TTE-TMLE)" = "red",
+                                "True S1 (Oracle)" = "darkblue", "True S0 (Oracle)" = "darkred")) +
+  labs(
+    title = "TTE-TMLE Marginal Survival Curves vs. Oracle Truth",
+    x = "Follow-up Day", y = "Survival Probability", color = "Arm"
+  ) +
+  theme_minimal()
+
+# Plot 2: Risk Difference with Pointwise CIs and Simultaneous Bands
+ggplot(res_plot, aes(x = t)) +
+  geom_ribbon(aes(ymin = rd_band_lower, ymax = rd_band_upper, fill = "95% Simultaneous Band"), alpha = 0.2) +
+  geom_ribbon(aes(ymin = rd_ci_lower, ymax = rd_ci_upper, fill = "95% Pointwise CI"), alpha = 0.3) +
+  geom_line(aes(y = rd, color = "TTE-TMLE Risk Difference"), linewidth = 1.2) +
+  geom_line(aes(y = rd_truth, color = "Oracle Truth"), linetype = "dashed", linewidth = 1.1) +
+  scale_color_manual(values = c("TTE-TMLE Risk Difference" = "purple", "Oracle Truth" = "black")) +
+  scale_fill_manual(values = c("95% Simultaneous Band" = "purple", "95% Pointwise CI" = "blue")) +
+  geom_hline(yintercept = 0, linetype = "dotted", color = "gray40") +
+  labs(
+    title = "Marginal Risk Difference (Treat - Control) with Simultaneous Confidence Band",
+    subtitle = "The purple shaded tunnel captures the entire 30-day journey simultaneously",
+    x = "Follow-up Day", y = "Risk Difference", color = "Trajectory", fill = "Inference"
+  ) +
+  theme_minimal()
+```
+
+---
+
+## 10. Cumulative Hazard Ratio via the Functional Delta Method
+
+Using the Functional Delta Method on the empirical influence curve:
+$$\theta(t) = \frac{\log(S_1(t))}{\log(S_0(t))}$$
+
+```{r plot-hr}
+#| code-summary: "Plot Cumulative Hazard Ratio trajectory"
+ggplot(res_plot, aes(x = t)) +
+  geom_ribbon(aes(ymin = hr_band_lower, ymax = hr_band_upper, fill = "95% Simultaneous Band"), alpha = 0.2) +
+  geom_ribbon(aes(ymin = hr_ci_lower, ymax = hr_ci_upper, fill = "95% Pointwise CI"), alpha = 0.3) +
+  geom_line(aes(y = hr_cum, color = "TTE-TMLE Cumulative HR"), linewidth = 1.2) +
+  geom_hline(yintercept = 1.0, linetype = "dashed", color = "red") +
+  scale_y_log10() +
+  scale_color_manual(values = c("TTE-TMLE Cumulative HR" = "darkgreen")) +
+  scale_fill_manual(values = c("95% Simultaneous Band" = "darkgreen", "95% Pointwise CI" = "green")) +
+  labs(
+    title = "TTE-TMLE Cumulative Hazard Ratio & Simultaneous Confidence Band",
+    subtitle = "Derived via the Functional Delta Method on EIC (Log Scale)",
+    x = "Follow-up Day", y = "Cumulative Hazard Ratio (Log Scale)", color = "Estimate", fill = "Inference"
+  ) +
+  theme_minimal()
+```
+
+---
+
+## 11. Competing Benchmark Comparison
+
+Finally, we run Naive KM, Landmarking at Day 10, and Parametric CCW-KM on this identical sample to directly observe the failure modes:
+
+```{r benchmarks}
+#| code-summary: "Fit and compare benchmark estimators"
+fit_all <- tte_tmle(dat_obs, grace_period = GRACE, tau = TAU, covars = c("x1"), seed = 123)
+
+c_naive <- fit_naive_cox(dat_obs, covars = c("x1"))
+c_landmark <- fit_landmark_cox(dat_obs, landmark_time = GRACE, covars = c("x1"), tau = TAU)
+c_td <- fit_td_cox(dat_obs, covars = c("x1"), tau = TAU)
+
+benchmark_comparison <- tibble(
+  Method = c("Oracle Truth", "TTE-TMLE (GLM)", "Parametric CCW (KM)", "Landmarking (Day 10)", "Naive Cox (Immortal Time Bias)"),
+  Day30_Estimate = c(
+    truth$rd_true[30],
+    fit_all$res_tmle$rd[30],
+    fit_all$res_log$rd[30],
+    # Landmarking survival diff post-day 10
+    NA, 
+    NA
+  ),
+  Estimated_HR = c(
+    truth$hr_true[30],
+    fit_all$res_tmle$hr_cum[30],
+    NA,
+    exp(coef(c_landmark)["tx_landmark"]),
+    exp(coef(c_naive)["tx_ever"])
+  )
+)
+
+knitr::kable(benchmark_comparison, digits = 4, caption = "Estimator Performance on Single Sample (N = 500)")
+```
+
+### Summary of Takeaways
+1. **Naive Methods** severely underestimate treatment benefit or induce artificial protective effects depending on the immortal window.
+2. **Standard CCW-KM** removes immortal time bias through cloning and weighting, but yields wide confidence intervals because it ignores baseline prognostic covariates.
+3. **TTE-TMLE** recovers the true causal trajectory, anchors the survival curves through the $Q$-model to eliminate jagged cliffs, and provides simultaneous confidence corridors in fractions of a second via the Multiplier Bootstrap.
