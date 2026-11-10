@@ -154,6 +154,97 @@ predict.SL.bart <- function(object, newdata, ...) {
   return(colMeans(pred_res$prob.test))
 }
 
+#' SuperLearner wrapper for 0th-Order Highly Adaptive Lasso (HAL) 1-Day Cumulative Step Basis
+#'
+#' @description Constructs a nonparametric 1-day resolution cumulative step-function basis
+#'   \eqn{\{I(t \ge k)\}_{k \ge 2}} interacted with treatment status \code{is_treated} and fits
+#'   an elastic-net penalized binomial regression via \code{glmnet}. Discovers arbitrary hazard
+#'   change-points or kinks at 1-day granularity without pre-specified time intervals.
+#'
+#' @param Y Outcome vector.
+#' @param X Predictor matrix or data frame.
+#' @param newX New predictor data for prediction.
+#' @param family Error distribution and link function.
+#' @param obsWeights Observation weights.
+#' @param id Cluster ID.
+#' @param alpha Elastic-net mixing parameter (default 0.5).
+#' @param nfolds Number of internal CV folds for glmnet (default 3).
+#' @param ... Additional arguments.
+#' @export
+SL.hal.time <- function(Y, X, newX, family, obsWeights, id, alpha = 0.5, nfolds = 3L, ...) {
+  has_t <- ("t" %in% names(X)) && (length(unique(X$t)) > 2L)
+  if (has_t && requireNamespace("glmnet", quietly = TRUE)) {
+    t_vals <- sort(unique(as.numeric(X$t)))[-1]
+    step_train <- vapply(t_vals, function(k) as.numeric(X$t >= k), numeric(nrow(X)))
+    step_test  <- vapply(t_vals, function(k) as.numeric(newX$t >= k), numeric(nrow(newX)))
+    colnames(step_train) <- colnames(step_test) <- paste0("t_ge_", t_vals)
+    
+    cov_vars <- setdiff(names(X), c("t", "t_sq", "is_treated", "post_grace"))
+    X_cov_train <- as.matrix(X[, cov_vars, drop = FALSE])
+    X_cov_test  <- as.matrix(newX[, cov_vars, drop = FALSE])
+    
+    has_trt <- ("is_treated" %in% names(X)) && (length(unique(X$is_treated)) > 1L)
+    if (has_trt) {
+      trt_tr <- as.numeric(X$is_treated)
+      trt_te <- as.numeric(newX$is_treated)
+      step_int_tr <- step_train * trt_tr
+      step_int_te <- step_test * trt_te
+      colnames(step_int_tr) <- colnames(step_int_te) <- paste0("trt_t_ge_", t_vals)
+      x_tr <- cbind(X_cov_train, is_treated = trt_tr, step_train, step_int_tr)
+      x_te <- cbind(X_cov_test,  is_treated = trt_te, step_test,  step_int_te)
+    } else {
+      x_tr <- cbind(X_cov_train, step_train)
+      x_te <- cbind(X_cov_test,  step_test)
+    }
+    
+    fit_cv <- tryCatch({
+      suppressWarnings(glmnet::cv.glmnet(
+        x = x_tr, y = Y, weights = obsWeights,
+        family = "binomial", alpha = alpha, nfolds = nfolds
+      ))
+    }, error = function(e) NULL)
+    
+    if (!is.null(fit_cv)) {
+      pred <- as.numeric(stats::predict(fit_cv, newx = x_te, s = "lambda.min", type = "response"))
+      fit <- list(object = fit_cv, t_vals = t_vals, cov_vars = cov_vars, has_trt = has_trt, has_t = TRUE)
+      class(fit) <- "SL.hal.time"
+      return(list(pred = pred, fit = fit))
+    }
+  }
+  
+  # Fallback to standard GLM if no time column or glmnet fails
+  fit.glm <- suppressWarnings(stats::glm(Y ~ ., data = X, family = family, weights = obsWeights))
+  pred <- suppressWarnings(stats::predict(fit.glm, newdata = newX, type = "response"))
+  fit <- list(object = fit.glm, has_t = FALSE)
+  class(fit) <- "SL.hal.time"
+  return(list(pred = pred, fit = fit))
+}
+
+#' Predict method for SL.hal.time objects
+#' @param object An object of class \code{"SL.hal.time"}.
+#' @param newdata New predictor data.
+#' @param ... Additional arguments.
+#' @export
+predict.SL.hal.time <- function(object, newdata, ...) {
+  if (isTRUE(object$has_t)) {
+    t_vals <- object$t_vals
+    step_te <- vapply(t_vals, function(k) as.numeric(newdata$t >= k), numeric(nrow(newdata)))
+    colnames(step_te) <- paste0("t_ge_", t_vals)
+    X_cov_te <- as.matrix(newdata[, object$cov_vars, drop = FALSE])
+    if (isTRUE(object$has_trt)) {
+      trt_te <- as.numeric(newdata$is_treated)
+      step_int_te <- step_te * trt_te
+      colnames(step_int_te) <- paste0("trt_t_ge_", t_vals)
+      x_te <- cbind(X_cov_te, is_treated = trt_te, step_te, step_int_te)
+    } else {
+      x_te <- cbind(X_cov_te, step_te)
+    }
+    return(as.numeric(stats::predict(object$object, newx = x_te, s = "lambda.min", type = "response")))
+  } else {
+    return(suppressWarnings(stats::predict(object$object, newdata = newdata, type = "response")))
+  }
+}
+
 # Ensure SuperLearner wrappers exist in global environment for SuperLearner workers
 register_sl_earth_int <- function() {
   if (!exists("SL.earth.int", mode = "function", envir = .GlobalEnv)) {
@@ -161,6 +252,12 @@ register_sl_earth_int <- function() {
   }
   if (!exists("SL.glm.time.int", mode = "function", envir = .GlobalEnv)) {
     assign("SL.glm.time.int", SL.glm.time.int, envir = .GlobalEnv)
+  }
+  if (!exists("SL.hal.time", mode = "function", envir = .GlobalEnv)) {
+    assign("SL.hal.time", SL.hal.time, envir = .GlobalEnv)
+  }
+  if (!exists("predict.SL.hal.time", mode = "function", envir = .GlobalEnv)) {
+    assign("predict.SL.hal.time", predict.SL.hal.time, envir = .GlobalEnv)
   }
   if (!exists("SL.bart", mode = "function", envir = .GlobalEnv)) {
     assign("SL.bart", SL.bart, envir = .GlobalEnv)

@@ -35,8 +35,8 @@ compute_ipcw_weights <- function(clones,
                                  dt = 1,
                                  p_form = NULL,
                                  use_sl = FALSE,
-                                 sl_lib = c("SL.mean", "SL.glm", "SL.earth.int", "SL.ranger"),
-                                 trim_quantile = c(0.01, 0.99)) {
+                                 sl_lib = c("SL.mean", "SL.glm", "SL.hal.time", "SL.earth.int", "SL.ranger"),
+                                 trim_quantile = c(0.001, 0.999)) {
   
   if (is.null(p_form)) {
     p_form <- paste(covars, collapse = " + ")
@@ -49,17 +49,17 @@ compute_ipcw_weights <- function(clones,
     register_sl_earth_int()
   }
   
-  # 1. Observational panel for control compliance hazard
+  # 1. Observational panel for control compliance hazard (restricted to grace period while alive)
   obs_panel <- clones %>%
     dplyr::filter(clone_arm == 1L) %>%
     dplyr::mutate(
-      tmax = dplyr::if_else(tx_ever == 1L, t_switch, time),
+      tmax = pmin(dplyr::if_else(tx_ever == 1L, t_switch, time), time, grace_period),
       n_int = pmax(ceiling(tmax / dt), 1L)
     ) %>%
     tidyr::uncount(weights = n_int, .id = "t") %>%
     dplyr::mutate(
       t_sq = t^2,
-      event_tx = dplyr::if_else(tx_ever == 1L & t == t_switch, 1L, 0L)
+      event_tx = dplyr::if_else(tx_ever == 1L & t == t_switch & time >= t_switch & t <= grace_period, 1L, 0L)
     )
   
   # 2. Treated cohort at grace period cutoff
@@ -131,14 +131,16 @@ compute_ipcw_weights <- function(clones,
     ) %>%
     dplyr::mutate(
       w_inc = dplyr::case_when(
-        arm == "control_no_tx" ~ (1 - p_ctrl_num) / (1 - p_ctrl_denom),
+        arm == "control_no_tx" & t <= grace_period ~ (1 - p_ctrl_num) / (1 - p_ctrl_denom),
+        arm == "control_no_tx" ~ 1,
         arm == "treat_tx" ~ dplyr::case_when(
           t == grace_period + 1L ~ p_treat_num / p_treat_denom,
           TRUE ~ 1
         )
       ),
       w_inc_unstab = dplyr::case_when(
-        arm == "control_no_tx" ~ 1 / (1 - p_ctrl_denom),
+        arm == "control_no_tx" & t <= grace_period ~ 1 / (1 - p_ctrl_denom),
+        arm == "control_no_tx" ~ 1,
         arm == "treat_tx" ~ dplyr::case_when(
           t == grace_period + 1L ~ 1 / p_treat_denom,
           TRUE ~ 1

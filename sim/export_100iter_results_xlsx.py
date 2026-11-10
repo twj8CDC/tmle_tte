@@ -92,11 +92,11 @@ def export_100iter_xlsx(csv_path="sim/simulation_results_100iter.csv", xlsx_path
 
     mc_headers = [
         "Scenario", "Specification Regime", "Estimator", "Replicates", "Mean Runtime (sec)",
-        "RD(15) Mean", "RD(15) True", "Bias(15)",
-        "RD(30) Mean", "RD(30) True", "Bias(30)", "Rel Bias (%)",
-        "EmpSE(30)", "MeanModSE(30)", "SE Ratio", "95% Coverage (%)",
-        "Delta RMSTD Mean", "RMSTD True", "RMSTD Bias",
-        "Marginal HR Mean", "HR True", "HR Bias", "HR Cov (%)",
+        "RD(15) Mean", "RD(15) True", "Bias(15)", "RMSE(15)",
+        "RD(30) Mean", "RD(30) True", "Bias(30)", "Rel Bias (%)", "RMSE(30)",
+        "EmpSE(30)", "MeanModSE(30)", "SE Ratio", "95% Coverage (%)", "RD(30) 95% CI Width",
+        "Delta RMSTD Mean", "RMSTD True", "RMSTD Bias", "RMSTD RMSE",
+        "Marginal HR Mean", "HR True", "HR Bias", "HR RMSE", "HR Cov (%)", "HR 95% CI Width",
         "Empirical Power (%)", "FNR (%)",
         "Uniform Band Cov (%)", "Mean Pointwise Band Cov (%)", "Mean Band Width"
     ]
@@ -110,13 +110,27 @@ def export_100iter_xlsx(csv_path="sim/simulation_results_100iter.csv", xlsx_path
         c.border = border_header
     ws_mc.row_dimensions[r_idx].height = 28
 
+    est_order_map = {
+        "Naive Cox": 1,
+        "Landmark Cox": 2,
+        "Time-Dependent Cox": 3,
+        "Time-Matched Cox": 4,
+        "CCW-CPHM": 5,
+        "CCW-KM": 6,
+        "TTE-TMLE (GLM)": 7,
+        "TTE-TMLE (SuperLearner)": 8,
+        "G-COMP (BART)": 9,
+        "TMLE + BART": 10
+    }
+
     def sort_key(k):
         try:
             scen_num = int(k[0].replace("Scenario ", ""))
         except:
             scen_num = 99
         reg_num = int(k[1].split()[1]) if ("Regime" in str(k[1])) else 9
-        return (scen_num, reg_num, str(k[2]))
+        est_rank = est_order_map.get(str(k[2]), 99)
+        return (scen_num, reg_num, est_rank, str(k[2]))
 
     sorted_keys = sorted(grouped.keys(), key=sort_key)
 
@@ -138,6 +152,7 @@ def export_100iter_xlsx(csv_path="sim/simulation_results_100iter.csv", xlsx_path
         rd15_mean = sum(rd15_ests) / len(rd15_ests) if rd15_ests else None
         rd15_true_val = rd15_trues[0] if rd15_trues else None
         bias15 = (rd15_mean - rd15_true_val) if (rd15_mean is not None and rd15_true_val is not None) else None
+        rmse15 = math.sqrt(sum((x - rd15_true_val)**2 for x in rd15_ests) / len(rd15_ests)) if (rd15_ests and rd15_true_val is not None) else None
 
         rd30_ests = [safe_float(x["rd_30_est"]) for x in r_list if safe_float(x["rd_30_est"]) is not None]
         rd30_trues = [safe_float(x["rd_30_true"]) for x in r_list if safe_float(x["rd_30_true"]) is not None]
@@ -145,6 +160,7 @@ def export_100iter_xlsx(csv_path="sim/simulation_results_100iter.csv", xlsx_path
         rd30_true_val = rd30_trues[0] if rd30_trues else None
         bias30 = (rd30_mean - rd30_true_val) if (rd30_mean is not None and rd30_true_val is not None) else None
         rel_bias30 = (bias30 / rd30_true_val * 100.0) if (bias30 is not None and rd30_true_val and rd30_true_val != 0) else None
+        rmse30 = math.sqrt(sum((x - rd30_true_val)**2 for x in rd30_ests) / len(rd30_ests)) if (rd30_ests and rd30_true_val is not None) else None
 
         # Empirical SE
         if len(rd30_ests) > 1:
@@ -157,15 +173,19 @@ def export_100iter_xlsx(csv_path="sim/simulation_results_100iter.csv", xlsx_path
         mean_mod_se = sum(mod_ses) / len(mod_ses) if mod_ses else None
         se_ratio = (mean_mod_se / emp_se) if (mean_mod_se is not None and emp_se and emp_se > 0) else None
 
-        # Coverage RD(30)
+        # Coverage RD(30) & CI Width RD(30)
         cov_flags = []
+        rd30_widths = []
         for x in r_list:
             l = safe_float(x["ci_lower_30"])
             u = safe_float(x["ci_upper_30"])
             tr = safe_float(x["rd_30_true"])
-            if l is not None and u is not None and tr is not None:
-                cov_flags.append(1.0 if (l <= tr <= u) else 0.0)
+            if l is not None and u is not None:
+                rd30_widths.append(u - l)
+                if tr is not None:
+                    cov_flags.append(1.0 if (l <= tr <= u) else 0.0)
         cov_30_pct = (sum(cov_flags) / len(cov_flags) * 100.0) if cov_flags else None
+        mean_rd30_width = (sum(rd30_widths) / len(rd30_widths)) if rd30_widths else None
 
         # RMSTD
         rmst_ests = [safe_float(x["rmstd_est"]) for x in r_list if safe_float(x["rmstd_est"]) is not None]
@@ -173,6 +193,7 @@ def export_100iter_xlsx(csv_path="sim/simulation_results_100iter.csv", xlsx_path
         rmst_mean = sum(rmst_ests) / len(rmst_ests) if rmst_ests else None
         rmst_true_val = rmst_trues[0] if rmst_trues else None
         rmst_bias = (rmst_mean - rmst_true_val) if (rmst_mean is not None and rmst_true_val is not None) else None
+        rmst_rmse = math.sqrt(sum((x - rmst_true_val)**2 for x in rmst_ests) / len(rmst_ests)) if (rmst_ests and rmst_true_val is not None) else None
 
         # Marginal HR
         hr_ests = [safe_float(x["hr_marginal_est"]) for x in r_list if safe_float(x["hr_marginal_est"]) is not None]
@@ -180,9 +201,18 @@ def export_100iter_xlsx(csv_path="sim/simulation_results_100iter.csv", xlsx_path
         hr_mean = sum(hr_ests) / len(hr_ests) if hr_ests else None
         hr_true_val = hr_trues[0] if hr_trues else None
         hr_bias = (hr_mean - hr_true_val) if (hr_mean is not None and hr_true_val is not None) else None
+        hr_rmse = math.sqrt(sum((x - hr_true_val)**2 for x in hr_ests) / len(hr_ests)) if (hr_ests and hr_true_val is not None) else None
 
         hr_covs = [safe_float(x["hr_covered_30"]) for x in r_list if safe_float(x["hr_covered_30"]) is not None]
         hr_cov_pct = (sum(hr_covs) / len(hr_covs) * 100.0) if hr_covs else None
+
+        hr_widths = []
+        for x in r_list:
+            hl = safe_float(x["hr_ci_lower_30"])
+            hu = safe_float(x["hr_ci_upper_30"])
+            if hl is not None and hu is not None:
+                hr_widths.append(hu - hl)
+        mean_hr_width = (sum(hr_widths) / len(hr_widths)) if hr_widths else None
 
         # Power & FNR
         rejects = [safe_float(x["reject_H0"]) for x in r_list if safe_float(x["reject_H0"]) is not None]
@@ -205,21 +235,27 @@ def export_100iter_xlsx(csv_path="sim/simulation_results_100iter.csv", xlsx_path
             round(rd15_mean, 4) if rd15_mean is not None else "N/A",
             round(rd15_true_val, 4) if rd15_true_val is not None else "N/A",
             round(bias15, 4) if bias15 is not None else "N/A",
+            round(rmse15, 4) if rmse15 is not None else "N/A",
             round(rd30_mean, 4) if rd30_mean is not None else "N/A",
             round(rd30_true_val, 4) if rd30_true_val is not None else "N/A",
             round(bias30, 4) if bias30 is not None else "N/A",
             round(rel_bias30, 2) if rel_bias30 is not None else "N/A",
+            round(rmse30, 4) if rmse30 is not None else "N/A",
             round(emp_se, 4) if emp_se is not None else "N/A",
             round(mean_mod_se, 4) if mean_mod_se is not None else "N/A",
             round(se_ratio, 3) if se_ratio is not None else "N/A",
             round(cov_30_pct, 1) if cov_30_pct is not None else "N/A",
+            round(mean_rd30_width, 4) if mean_rd30_width is not None else "N/A",
             round(rmst_mean, 4) if rmst_mean is not None else "N/A",
             round(rmst_true_val, 4) if rmst_true_val is not None else "N/A",
             round(rmst_bias, 4) if rmst_bias is not None else "N/A",
+            round(rmst_rmse, 4) if rmst_rmse is not None else "N/A",
             round(hr_mean, 3) if hr_mean is not None else "N/A",
             round(hr_true_val, 3) if hr_true_val is not None else "N/A",
             round(hr_bias, 3) if hr_bias is not None else "N/A",
+            round(hr_rmse, 3) if hr_rmse is not None else "N/A",
             round(hr_cov_pct, 1) if hr_cov_pct is not None else "N/A",
+            round(mean_hr_width, 3) if mean_hr_width is not None else "N/A",
             round(emp_power, 1) if emp_power is not None else "N/A",
             round(emp_fnr, 1) if emp_fnr is not None else "N/A",
             round(simul_cov_pct, 1) if simul_cov_pct is not None else "N/A",
@@ -237,7 +273,7 @@ def export_100iter_xlsx(csv_path="sim/simulation_results_100iter.csv", xlsx_path
                 cell.alignment = align_center
 
             # Highlight 95% Coverage
-            if c_i == 16 and isinstance(val, (int, float)):
+            if c_i == 18 and isinstance(val, (int, float)):
                 if val >= 92.0:
                     cell.fill = fill_green
                 elif val < 85.0:
@@ -300,12 +336,12 @@ def export_100iter_xlsx(csv_path="sim/simulation_results_100iter.csv", xlsx_path
 
         s_headers = [
             "Specification Regime", "Estimator", "Replicates",
-            "RD(15) Mean", "Bias(15)",
-            "RD(30) Mean", "RD(30) True", "Bias(30)", "Rel Bias (%)",
-            "EmpSE(30)", "ModelSE(30)", "SE Ratio", "95% Cov (%)",
-            "Delta RMSTD Mean", "RMSTD True", "RMSTD Bias",
-            "Marginal HR Mean", "HR True", "HR Bias", "HR Cov (%)",
-            "Empirical Power (%)", "Uniform Band Cov (%)", "Mean Band Width"
+            "RD(15) Mean", "Bias(15)", "RMSE(15)",
+            "RD(30) Mean", "RD(30) True", "Bias(30)", "Rel Bias (%)", "RMSE(30)",
+            "EmpSE(30)", "ModelSE(30)", "SE Ratio", "95% Cov (%)", "RD(30) 95% CI Width",
+            "Delta RMSTD Mean", "RMSTD True", "RMSTD Bias", "RMSTD RMSE",
+            "Marginal HR Mean", "HR True", "HR Bias", "HR RMSE", "HR Cov (%)", "HR 95% CI Width",
+            "Empirical Power (%)", "Uniform Band Cov (%)", "Mean Pointwise Band Cov (%)", "Mean Band Width"
         ]
 
         r_idx = 4
@@ -333,6 +369,7 @@ def export_100iter_xlsx(csv_path="sim/simulation_results_100iter.csv", xlsx_path
             rd15_mean = sum(rd15_ests) / len(rd15_ests) if rd15_ests else None
             rd15_true_val = rd15_trues[0] if rd15_trues else None
             bias15 = (rd15_mean - rd15_true_val) if (rd15_mean is not None and rd15_true_val is not None) else None
+            rmse15 = math.sqrt(sum((x - rd15_true_val)**2 for x in rd15_ests) / len(rd15_ests)) if (rd15_ests and rd15_true_val is not None) else None
 
             rd30_ests = [safe_float(x["rd_30_est"]) for x in r_list if safe_float(x["rd_30_est"]) is not None]
             rd30_trues = [safe_float(x["rd_30_true"]) for x in r_list if safe_float(x["rd_30_true"]) is not None]
@@ -340,6 +377,7 @@ def export_100iter_xlsx(csv_path="sim/simulation_results_100iter.csv", xlsx_path
             rd30_true_val = rd30_trues[0] if rd30_trues else None
             bias30 = (rd30_mean - rd30_true_val) if (rd30_mean is not None and rd30_true_val is not None) else None
             rel_bias30 = (bias30 / rd30_true_val * 100.0) if (bias30 is not None and rd30_true_val and rd30_true_val != 0) else None
+            rmse30 = math.sqrt(sum((x - rd30_true_val)**2 for x in rd30_ests) / len(rd30_ests)) if (rd30_ests and rd30_true_val is not None) else None
 
             if len(rd30_ests) > 1:
                 var_emp = sum((x - rd30_mean)**2 for x in rd30_ests) / (len(rd30_ests) - 1)
@@ -352,34 +390,51 @@ def export_100iter_xlsx(csv_path="sim/simulation_results_100iter.csv", xlsx_path
             se_ratio = (mean_mod_se / emp_se) if (mean_mod_se is not None and emp_se and emp_se > 0) else None
 
             cov_flags = []
+            rd30_widths = []
             for x in r_list:
                 l = safe_float(x["ci_lower_30"])
                 u = safe_float(x["ci_upper_30"])
                 tr = safe_float(x["rd_30_true"])
-                if l is not None and u is not None and tr is not None:
-                    cov_flags.append(1.0 if (l <= tr <= u) else 0.0)
+                if l is not None and u is not None:
+                    rd30_widths.append(u - l)
+                    if tr is not None:
+                        cov_flags.append(1.0 if (l <= tr <= u) else 0.0)
             cov_30_pct = (sum(cov_flags) / len(cov_flags) * 100.0) if cov_flags else None
+            mean_rd30_width = (sum(rd30_widths) / len(rd30_widths)) if rd30_widths else None
 
             rmst_ests = [safe_float(x["rmstd_est"]) for x in r_list if safe_float(x["rmstd_est"]) is not None]
             rmst_trues = [safe_float(x["rmstd_true"]) for x in r_list if safe_float(x["rmstd_true"]) is not None]
             rmst_mean = sum(rmst_ests) / len(rmst_ests) if rmst_ests else None
             rmst_true_val = rmst_trues[0] if rmst_trues else None
             rmst_bias = (rmst_mean - rmst_true_val) if (rmst_mean is not None and rmst_true_val is not None) else None
+            rmst_rmse = math.sqrt(sum((x - rmst_true_val)**2 for x in rmst_ests) / len(rmst_ests)) if (rmst_ests and rmst_true_val is not None) else None
 
             hr_ests = [safe_float(x["hr_marginal_est"]) for x in r_list if safe_float(x["hr_marginal_est"]) is not None]
             hr_trues = [safe_float(x["hr_marginal_true"]) for x in r_list if safe_float(x["hr_marginal_true"]) is not None]
             hr_mean = sum(hr_ests) / len(hr_ests) if hr_ests else None
             hr_true_val = hr_trues[0] if hr_trues else None
             hr_bias = (hr_mean - hr_true_val) if (hr_mean is not None and hr_true_val is not None) else None
+            hr_rmse = math.sqrt(sum((x - hr_true_val)**2 for x in hr_ests) / len(hr_ests)) if (hr_ests and hr_true_val is not None) else None
 
             hr_covs = [safe_float(x["hr_covered_30"]) for x in r_list if safe_float(x["hr_covered_30"]) is not None]
             hr_cov_pct = (sum(hr_covs) / len(hr_covs) * 100.0) if hr_covs else None
+
+            hr_widths = []
+            for x in r_list:
+                hl = safe_float(x["hr_ci_lower_30"])
+                hu = safe_float(x["hr_ci_upper_30"])
+                if hl is not None and hu is not None:
+                    hr_widths.append(hu - hl)
+            mean_hr_width = (sum(hr_widths) / len(hr_widths)) if hr_widths else None
 
             rejects = [safe_float(x["reject_H0"]) for x in r_list if safe_float(x["reject_H0"]) is not None]
             emp_power = (sum(rejects) / len(rejects) * 100.0) if rejects else None
 
             simul_covs = [safe_float(x["uniform_band_covered"]) for x in r_list if safe_float(x["uniform_band_covered"]) is not None]
             simul_cov_pct = (sum(simul_covs) / len(simul_covs) * 100.0) if simul_covs else None
+
+            pw_band_covs = [safe_float(x["prop_time_points_covered"]) for x in r_list if safe_float(x["prop_time_points_covered"]) is not None]
+            pw_band_cov_pct = (sum(pw_band_covs) / len(pw_band_covs) * 100.0) if pw_band_covs else None
 
             band_widths = [safe_float(x["mean_band_width"]) for x in r_list if safe_float(x["mean_band_width"]) is not None]
             mean_band_width = sum(band_widths) / len(band_widths) if band_widths else None
@@ -388,23 +443,30 @@ def export_100iter_xlsx(csv_path="sim/simulation_results_100iter.csv", xlsx_path
                 reg_str, est_str, B,
                 round(rd15_mean, 4) if rd15_mean is not None else "N/A",
                 round(bias15, 4) if bias15 is not None else "N/A",
+                round(rmse15, 4) if rmse15 is not None else "N/A",
                 round(rd30_mean, 4) if rd30_mean is not None else "N/A",
                 round(rd30_true_val, 4) if rd30_true_val is not None else "N/A",
                 round(bias30, 4) if bias30 is not None else "N/A",
                 round(rel_bias30, 2) if rel_bias30 is not None else "N/A",
+                round(rmse30, 4) if rmse30 is not None else "N/A",
                 round(emp_se, 4) if emp_se is not None else "N/A",
                 round(mean_mod_se, 4) if mean_mod_se is not None else "N/A",
                 round(se_ratio, 3) if se_ratio is not None else "N/A",
                 round(cov_30_pct, 1) if cov_30_pct is not None else "N/A",
+                round(mean_rd30_width, 4) if mean_rd30_width is not None else "N/A",
                 round(rmst_mean, 4) if rmst_mean is not None else "N/A",
                 round(rmst_true_val, 4) if rmst_true_val is not None else "N/A",
                 round(rmst_bias, 4) if rmst_bias is not None else "N/A",
+                round(rmst_rmse, 4) if rmst_rmse is not None else "N/A",
                 round(hr_mean, 3) if hr_mean is not None else "N/A",
                 round(hr_true_val, 3) if hr_true_val is not None else "N/A",
                 round(hr_bias, 3) if hr_bias is not None else "N/A",
+                round(hr_rmse, 3) if hr_rmse is not None else "N/A",
                 round(hr_cov_pct, 1) if hr_cov_pct is not None else "N/A",
+                round(mean_hr_width, 3) if mean_hr_width is not None else "N/A",
                 round(emp_power, 1) if emp_power is not None else "N/A",
                 round(simul_cov_pct, 1) if simul_cov_pct is not None else "N/A",
+                round(pw_band_cov_pct, 1) if pw_band_cov_pct is not None else "N/A",
                 round(mean_band_width, 4) if mean_band_width is not None else "N/A"
             ]
 
@@ -413,7 +475,7 @@ def export_100iter_xlsx(csv_path="sim/simulation_results_100iter.csv", xlsx_path
                 cell.font = font_bold if "TMLE" in est_str else font_regular
                 cell.border = border_thin
                 cell.alignment = align_left if c_i <= 2 else align_center
-                if c_i == 13 and isinstance(val, (int, float)):
+                if c_i == 15 and isinstance(val, (int, float)):
                     if val >= 92.0:
                         cell.fill = fill_green
                     elif val < 85.0:
