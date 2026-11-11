@@ -4,7 +4,8 @@
 #' - Columns 1-4 (Estimands): RD(15), RD(30), RMSTD(30), Marginal HR(30)
 #' - Rows 1-4: Bias, RMSE, 95% Coverage (%), 95% CI Width
 #' - Row 5 (Diagnostics): SE Ratio [RD(30)], Uniform Band Cov (%), Mean Pointwise Band Cov (%), Mean Band Width
-#' - Y-axis Grouping: Non-Parametric (Top, Green), Parametric [Corr] (Middle, Blue), Parametric [Mis] (Bottom, Red)
+#' - Y-axis Grouping: Non-Parametric (Top), Parametric [Corr] (Middle, Filled), Parametric [Mis] (Bottom, Open)
+#' - Colors & Shapes: Non-Parametric (Green Triangles), TTE-TMLE GLM (Blue Triangles), CCW (Blue Circles), Cox (Red Squares)
 
 library(ggplot2)
 library(dplyr)
@@ -109,20 +110,75 @@ generate_100iter_plots <- function(rds_path = "sim/simulation_results_100iter.rd
     "Scenario 8" = "Scenario 8: Depletion of Susceptibles & Survivor Collider Bias (Unmeasured Frailty)"
   )
 
-  # Color and shape definitions for the 3 groups
-  group_colors <- c(
-    "Non-Parametric" = "#2CA02C",
-    "Parametric (Correct)" = "#1F77B4",
-    "Parametric (Misspecified)" = "#D62728"
+  # Color, fill, and shape definitions per y_label
+  # Colors: Non-Parametric = Green (#2CA02C), CCW & TTE-TMLE (GLM) = Blue (#1F77B4), Cox = Red (#D62728)
+  # Shapes (pch 21=circle, 22=square, 24=triangle):
+  #   Triangles (24): 3 Non-Parametrics + TTE-TMLE (GLM)
+  #   Circles (21):   CCW-KM, CCW-CPHM
+  #   Squares (22):   Naive Cox, Landmark Cox, Time-Dependent Cox, Time-Matched Cox
+  # Fill: Filled with group color for Non-Parametric and [Corr]; "white" (open) for [Mis]
+  label_colors <- c(
+    "Naive Cox [Mis]"            = "#D62728",
+    "Landmark Cox [Mis]"         = "#D62728",
+    "Time-Dependent Cox [Mis]"   = "#D62728",
+    "Time-Matched Cox [Mis]"     = "#D62728",
+    "CCW-CPHM [Mis]"             = "#1F77B4",
+    "CCW-KM [Mis]"               = "#1F77B4",
+    "TTE-TMLE (GLM) [Mis]"       = "#1F77B4",
+    "Naive Cox [Corr]"           = "#D62728",
+    "Landmark Cox [Corr]"        = "#D62728",
+    "Time-Dependent Cox [Corr]"  = "#D62728",
+    "Time-Matched Cox [Corr]"    = "#D62728",
+    "CCW-CPHM [Corr]"            = "#1F77B4",
+    "CCW-KM [Corr]"              = "#1F77B4",
+    "TTE-TMLE (GLM) [Corr]"      = "#1F77B4",
+    "TTE-TMLE (SuperLearner)"    = "#2CA02C",
+    "G-COMP (BART)"              = "#2CA02C",
+    "TTE-TMLE (BART)"            = "#2CA02C"
   )
-  group_shapes <- c(
-    "Non-Parametric" = 17,
-    "Parametric (Correct)" = 16,
-    "Parametric (Misspecified)" = 15
+
+  label_fills <- c(
+    "Naive Cox [Mis]"            = "white",
+    "Landmark Cox [Mis]"         = "white",
+    "Time-Dependent Cox [Mis]"   = "white",
+    "Time-Matched Cox [Mis]"     = "white",
+    "CCW-CPHM [Mis]"             = "white",
+    "CCW-KM [Mis]"               = "white",
+    "TTE-TMLE (GLM) [Mis]"       = "white",
+    "Naive Cox [Corr]"           = "#D62728",
+    "Landmark Cox [Corr]"        = "#D62728",
+    "Time-Dependent Cox [Corr]"  = "#D62728",
+    "Time-Matched Cox [Corr]"    = "#D62728",
+    "CCW-CPHM [Corr]"            = "#1F77B4",
+    "CCW-KM [Corr]"              = "#1F77B4",
+    "TTE-TMLE (GLM) [Corr]"      = "#1F77B4",
+    "TTE-TMLE (SuperLearner)"    = "#2CA02C",
+    "G-COMP (BART)"              = "#2CA02C",
+    "TTE-TMLE (BART)"            = "#2CA02C"
+  )
+
+  label_shapes <- c(
+    "Naive Cox [Mis]"            = 22,
+    "Landmark Cox [Mis]"         = 22,
+    "Time-Dependent Cox [Mis]"   = 22,
+    "Time-Matched Cox [Mis]"     = 22,
+    "CCW-CPHM [Mis]"             = 21,
+    "CCW-KM [Mis]"               = 21,
+    "TTE-TMLE (GLM) [Mis]"       = 24,
+    "Naive Cox [Corr]"           = 22,
+    "Landmark Cox [Corr]"        = 22,
+    "Time-Dependent Cox [Corr]"  = 22,
+    "Time-Matched Cox [Corr]"    = 22,
+    "CCW-CPHM [Corr]"            = 21,
+    "CCW-KM [Corr]"              = 21,
+    "TTE-TMLE (GLM) [Corr]"      = 24,
+    "TTE-TMLE (SuperLearner)"    = 24,
+    "G-COMP (BART)"              = 24,
+    "TTE-TMLE (BART)"            = 24
   )
 
   make_cell_plot <- function(data, metric_col, title_str, ref_val = NA_real_, is_leftmost = FALSE) {
-    p <- ggplot(data, aes(x = .data[[metric_col]], y = y_label, color = group_cat, shape = group_cat)) +
+    p <- ggplot(data, aes(x = .data[[metric_col]], y = y_label, color = y_label, fill = y_label, shape = y_label)) +
       geom_hline(yintercept = c(7.5, 14.5), linetype = "dashed", color = "#BBBBBB", linewidth = 0.5)
 
     if (!is.na(ref_val)) {
@@ -137,9 +193,10 @@ generate_100iter_plots <- function(rds_path = "sim/simulation_results_100iter.rd
     }
 
     p <- p +
-      geom_point(size = 2.4, na.rm = TRUE) +
-      scale_color_manual(values = group_colors, drop = FALSE) +
-      scale_shape_manual(values = group_shapes, drop = FALSE) +
+      geom_point(size = 2.4, stroke = 0.85, na.rm = TRUE) +
+      scale_color_manual(values = label_colors, drop = FALSE) +
+      scale_fill_manual(values = label_fills, drop = FALSE) +
+      scale_shape_manual(values = label_shapes, drop = FALSE) +
       scale_y_discrete(drop = FALSE) +
       labs(title = title_str, x = NULL, y = NULL) +
       theme_bw(base_size = 9) +
@@ -199,7 +256,7 @@ generate_100iter_plots <- function(rds_path = "sim/simulation_results_100iter.rd
       plot_layout(heights = c(1, 1, 1, 1, 1)) +
       plot_annotation(
         title = scenario_titles[s_name],
-        subtitle = "100-Iteration Monte Carlo Benchmark (N = 1,000, tau = 30d, Grace = 10d) | 4x4 Estimand Grid (Rows 1-4) + 1x4 Diagnostics (Row 5)\nGroups: Non-Parametric (Green Triangle, Top), Parametric [Corr] (Blue Circle, Middle), Parametric [Mis] (Red Square, Bottom)",
+        subtitle = "100-Iteration Monte Carlo Benchmark (N = 1,000, tau = 30d, Grace = 10d) | 4x4 Estimand Grid (Rows 1-4) + 1x4 Diagnostics (Row 5)\nColors: Non-Parametric (Green), TTE-TMLE (GLM) & CCW (Blue), Cox (Red) | Shapes: TMLE/Non-Param (Triangle), CCW (Circle), Cox (Square) | Fill: [Corr] Filled, [Mis] Open",
         caption = "Notes: Landmark Cox RMSTD is NA by construction (follow-up restricted to Days 11-30). Naive/Landmark/TD-Cox/Matched/CPHM do not construct simultaneous confidence bands (NA).",
         theme = theme(
           plot.title = element_text(size = 13, face = "bold", color = "#0F2C59"),
