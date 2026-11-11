@@ -113,7 +113,7 @@ marginalize_gcomp <- function(data,
     ) %>%
     dplyr::mutate(
       w_inc = dplyr::case_when(
-        arm == "control_no_tx" ~ (1 - cf_p_ctrl_num) / (1 - cf_p_ctrl_denom),
+        arm == "control_no_tx" ~ dplyr::case_when(t <= grace_period ~ (1 - cf_p_ctrl_num) / (1 - cf_p_ctrl_denom), TRUE ~ 1),
         arm == "treat_tx" ~ dplyr::case_when(t == grace_period + 1L ~ cf_p_treat_num / cf_p_treat_denom, TRUE ~ 1)
       )
     ) %>%

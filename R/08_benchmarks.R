@@ -155,16 +155,25 @@ fit_td_cox <- function(data, covars = NULL, tau = 30, grace_period = 10, q_form 
   s0_proj <- exp(-ch0)
   s1_proj <- exp(-ch1)
   rd_proj <- s1_proj - s0_proj
+  t_mid <- min(15L, tau)
+  rmstd_val <- sum(rd_proj)
   
-  # Approximate SE via delta method
-  se_rd_tau <- abs(rd_proj[tau]) * se_beta
+  # Delta-method derivatives dS1(t)/dbeta
+  dS1_dbeta_vec <- ifelse(seq_len(tau) <= t_switch_rep, 0, -(ch0 - ch_switch) * hr * s1_proj)
+  se_rd_15 <- sqrt((dS1_dbeta_vec[t_mid] * se_beta)^2 + (rd_proj[t_mid] / sqrt(nrow(df)))^2 * 0.25)
+  se_rd_tau <- sqrt((dS1_dbeta_vec[tau] * se_beta)^2 + (rd_proj[tau] / sqrt(nrow(df)))^2 * 0.25)
+  se_rmstd <- sqrt((sum(dS1_dbeta_vec) * se_beta)^2 + (rmstd_val / sqrt(nrow(df)))^2 * 0.25)
   
   return(list(
     model = model,
     hr = hr,
     hr_ci = hr_ci,
+    rd_15 = rd_proj[t_mid],
+    se_rd_15 = se_rd_15,
     rd_tau = rd_proj[tau],
     se_rd_tau = se_rd_tau,
+    rmstd = rmstd_val,
+    se_rmstd = se_rmstd,
     S0 = s0_proj,
     S1 = s1_proj,
     rd = rd_proj
@@ -333,17 +342,21 @@ fit_time_matched_cox <- function(data,
   
   s0_proj <- numeric(tau)
   s1_proj <- numeric(tau)
+  dS1_dbeta_vec <- numeric(tau)
   for (t in seq_len(tau)) {
     s0_proj[t] <- mean(exp(-H0_t[t] * mult0), na.rm = TRUE)
     H1_it <- ifelse(t < t_sw_imp, H0_t[t], H0_sw + (H0_t[t] - H0_sw) * hr) * mult0
     s1_proj[t] <- mean(exp(-H1_it), na.rm = TRUE)
+    dH1_t <- ifelse(t < t_sw_imp, 0, pmax(0, H0_t[t] - H0_sw) * hr * mult0)
+    dS1_dbeta_vec[t] <- mean(-dH1_t * exp(-H1_it), na.rm = TRUE)
   }
   rd_proj <- s1_proj - s0_proj
+  t_mid <- min(15L, tau)
+  rmstd_val <- sum(rd_proj)
   
-  dH1_dbeta <- pmax(0, H0_t[tau] - H0_sw) * hr * mult0
-  H1_tau <- (H0_sw + pmax(0, H0_t[tau] - H0_sw) * hr) * mult0
-  dS1_dbeta <- mean(-dH1_dbeta * exp(-H1_tau), na.rm = TRUE)
-  se_rd_tau <- sqrt((dS1_dbeta * se_beta)^2 + (rd_proj[tau] / sqrt(nrow(df)))^2 * 0.25)
+  se_rd_15 <- sqrt((dS1_dbeta_vec[t_mid] * se_beta)^2 + (rd_proj[t_mid] / sqrt(nrow(df)))^2 * 0.25)
+  se_rd_tau <- sqrt((dS1_dbeta_vec[tau] * se_beta)^2 + (rd_proj[tau] / sqrt(nrow(df)))^2 * 0.25)
+  se_rmstd <- sqrt((sum(dS1_dbeta_vec) * se_beta)^2 + (rmstd_val / sqrt(nrow(df)))^2 * 0.25)
   
   return(list(
     model = model,
@@ -351,8 +364,12 @@ fit_time_matched_cox <- function(data,
     hr_ci = hr_ci,
     s0_tau = s0_proj[tau],
     s1_tau = s1_proj[tau],
+    rd_15 = rd_proj[t_mid],
+    se_rd_15 = se_rd_15,
     rd_tau = rd_proj[tau],
     se_rd_tau = se_rd_tau,
+    rmstd = rmstd_val,
+    se_rmstd = se_rmstd,
     S0 = s0_proj,
     S1 = s1_proj,
     rd = rd_proj
@@ -425,15 +442,19 @@ fit_ccw_cphm <- function(panel_w, covars = NULL, tau = 30, q_form = NULL) {
   
   s0_proj <- vapply(seq_len(tau), function(t) mean(exp(-H0_t[t] * mult0), na.rm = TRUE), numeric(1))
   s1_proj <- vapply(seq_len(tau), function(t) mean(exp(-H0_t[t] * mult1), na.rm = TRUE), numeric(1))
+  dS1_dbeta_vec <- vapply(seq_len(tau), function(t) mean(-H0_t[t] * mult1 * exp(-H0_t[t] * mult1), na.rm = TRUE), numeric(1))
   rd_proj <- s1_proj - s0_proj
   
+  t_mid <- min(15L, tau)
   s0_tau <- s0_proj[tau]
   s1_tau <- s1_proj[tau]
   rd_tau <- rd_proj[tau]
+  rmstd_val <- sum(rd_proj)
   
-  # Functional delta-method SE for marginalized RD(tau)
-  dS1_dbeta <- mean(-H0_t[tau] * mult1 * exp(-H0_t[tau] * mult1), na.rm = TRUE)
-  se_rd_tau <- sqrt((dS1_dbeta * se_beta)^2 + (rd_tau / sqrt(nrow(base_cohort)))^2 * 0.25)
+  # Functional delta-method SE for marginalized RD(15), RD(tau), and RMSTD(tau)
+  se_rd_15 <- sqrt((dS1_dbeta_vec[t_mid] * se_beta)^2 + (rd_proj[t_mid] / sqrt(nrow(base_cohort)))^2 * 0.25)
+  se_rd_tau <- sqrt((dS1_dbeta_vec[tau] * se_beta)^2 + (rd_tau / sqrt(nrow(base_cohort)))^2 * 0.25)
+  se_rmstd <- sqrt((sum(dS1_dbeta_vec) * se_beta)^2 + (rmstd_val / sqrt(nrow(base_cohort)))^2 * 0.25)
   
   return(list(
     model = model,
@@ -441,8 +462,12 @@ fit_ccw_cphm <- function(panel_w, covars = NULL, tau = 30, q_form = NULL) {
     hr_ci = hr_ci,
     s0_tau = s0_tau,
     s1_tau = s1_tau,
+    rd_15 = rd_proj[t_mid],
+    se_rd_15 = se_rd_15,
     rd_tau = rd_tau,
     se_rd_tau = se_rd_tau,
+    rmstd = rmstd_val,
+    se_rmstd = se_rmstd,
     S0 = s0_proj,
     S1 = s1_proj,
     rd = rd_proj
@@ -489,6 +514,7 @@ fit_ccw_km <- function(panel_w,
     results = res,
     crit_val_simul = inf$crit_val_simul,
     rmstd_tau = rmstd,
+    se_rmstd = inf$se_rmstd,
     hr_marginal_tau = hr_marg,
     hr_ci_lower_tau = hr_ci_l,
     hr_ci_upper_tau = hr_ci_u,

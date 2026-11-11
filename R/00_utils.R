@@ -78,25 +78,38 @@ SL.earth.int <- function(..., degree = 2) {
 #' @param ... Additional arguments.
 #' @export
 SL.glm.time.int <- function(Y, X, newX, family, obsWeights, id, df_ns = 4, ...) {
+  cov_vars <- setdiff(names(X), c("t", "t_sq", "is_treated", "post_grace"))
+  build_cov_term <- function(df_x, vars) {
+    if (length(vars) == 0L) return("1")
+    terms <- vapply(vars, function(v) {
+      if (length(unique(df_x[[v]])) > 5L) {
+        paste0("splines::ns(", v, ", df = 3)")
+      } else {
+        v
+      }
+    }, character(1))
+    base_str <- paste(terms, collapse = " + ")
+    if (length(terms) >= 2L) {
+      paste0("(", base_str, ")^2")
+    } else {
+      base_str
+    }
+  }
+  cov_term <- build_cov_term(X, cov_vars)
+
   if (all(c("t", "is_treated") %in% names(X))) {
     if (length(unique(X$is_treated)) > 1) {
-      cov_vars <- setdiff(names(X), c("t", "t_sq", "is_treated", "post_grace"))
-      cov_term <- if (length(cov_vars) > 0) paste(cov_vars, collapse = " + ") else "1"
       form_str <- paste0("Y ~ ", cov_term, " + splines::ns(t, df = ", df_ns, ") * is_treated")
     } else {
-      cov_vars <- setdiff(names(X), c("t", "t_sq", "is_treated", "post_grace"))
-      cov_term <- if (length(cov_vars) > 0) paste(cov_vars, collapse = " + ") else "1"
       form_str <- paste0("Y ~ ", cov_term, " + splines::ns(t, df = ", df_ns, ")")
     }
   } else if ("t" %in% names(X)) {
-    cov_vars <- setdiff(names(X), c("t", "t_sq", "post_grace"))
-    cov_term <- if (length(cov_vars) > 0) paste(cov_vars, collapse = " + ") else "1"
     form_str <- paste0("Y ~ ", cov_term, " + splines::ns(t, df = ", df_ns, ")")
   } else {
-    form_str <- "Y ~ ."
+    form_str <- paste0("Y ~ ", cov_term)
   }
-  fit.glm <- stats::glm(stats::as.formula(form_str), data = X, family = family, weights = obsWeights)
-  pred <- stats::predict(fit.glm, newdata = newX, type = "response")
+  fit.glm <- suppressWarnings(stats::glm(stats::as.formula(form_str), data = X, family = family, weights = obsWeights))
+  pred <- suppressWarnings(stats::predict(fit.glm, newdata = newX, type = "response"))
   fit <- list(object = fit.glm)
   class(fit) <- "SL.glm"
   return(list(pred = pred, fit = fit))

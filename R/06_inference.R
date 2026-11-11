@@ -127,12 +127,18 @@ compute_eic_inference <- function(panel_w,
   # Simulated Gaussian process: G = (1 / sqrt(n_units)) * (Z * D) (dimension: n_boot x n_times)
   G_proc <- (Z_mat %*% D_mat) / sqrt(n_units)
   
-  # Supremum over time for each bootstrap draw
-  sup_G <- apply(abs(G_proc), 1, max)
+  # Supremum over active event horizon for each bootstrap draw
+  valid_cols <- which(se_vec > 0.002)
+  if (length(valid_cols) < 5L) valid_cols <- seq(from = min(5L, n_times), to = n_times)
+  sup_G <- apply(abs(G_proc[, valid_cols, drop = FALSE]), 1, max)
   
   # Simultaneous critical value
   crit_val_simul <- stats::quantile(sup_G, probs = 1 - alpha, names = FALSE)
   crit_val_pointwise <- stats::qnorm(1 - alpha / 2)
+  
+  # Exact EIC standard error for RMSTD(tau) = sum_{t=1}^tau RD(t)
+  ic_rmstd <- rowSums(ic_mat, na.rm = TRUE)
+  se_rmstd <- sqrt(stats::var(ic_rmstd) / n_units)
   
   # 6. Functional Delta Method for Cumulative Hazard Ratio:
   # theta(t) = log(S1(t)) / log(S0(t))
@@ -188,6 +194,7 @@ compute_eic_inference <- function(panel_w,
     crit_val_simul = crit_val_simul,
     crit_val_pointwise = crit_val_pointwise,
     ic_matrix = ic_mat,
+    se_rmstd = se_rmstd,
     eic_summary = eic_summary,
     hr_summary = hr_summary
   ))
@@ -312,10 +319,15 @@ compute_ccw_km_inference <- function(panel_w,
   if (!is.null(seed)) set.seed(seed)
   Z_mat <- matrix(stats::rnorm(n_boot * n_patients), nrow = n_boot, ncol = n_patients)
   G_proc <- (Z_mat %*% D_mat) / sqrt(n_patients)
-  sup_G <- apply(abs(G_proc), 1, max)
+  valid_cols_km <- which(se_vec > 0.002)
+  if (length(valid_cols_km) < 5L) valid_cols_km <- seq(from = min(5L, n_times), to = n_times)
+  sup_G <- apply(abs(G_proc[, valid_cols_km, drop = FALSE]), 1, max)
   
   crit_val_simul <- stats::quantile(sup_G, probs = 1 - alpha, names = FALSE)
   crit_val_pointwise <- stats::qnorm(1 - alpha / 2)
+  
+  ic_rmstd_km <- rowSums(ic_mat, na.rm = TRUE)
+  se_rmstd_km <- sqrt(stats::var(ic_rmstd_km) / n_patients)
   
   # Format marginal results
   surv_wide <- surv_arm %>%
@@ -365,6 +377,7 @@ compute_ccw_km_inference <- function(panel_w,
     crit_val_simul = crit_val_simul,
     crit_val_pointwise = crit_val_pointwise,
     ic_matrix = ic_mat,
+    se_rmstd = se_rmstd_km,
     se_RD = km_summary$se_RD,
     se_log_hr = hr_summary_km$se_log_hr
   ))
