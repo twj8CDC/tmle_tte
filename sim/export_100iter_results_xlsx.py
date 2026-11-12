@@ -283,6 +283,53 @@ def export_100iter_xlsx(csv_path="sim/simulation_results_100iter.csv", xlsx_path
                     cell.fill = fill_amber
 
     # -------------------------------------------------------------
+    # 1B. CONDITIONAL COX HR TAB (Landmark, Time-Dependent, Time-Matched)
+    # -------------------------------------------------------------
+    cond_keys = [
+        k for k in sorted_keys
+        if any(safe_float(x.get("hr_cond_est")) is not None for x in grouped[k])
+    ]
+    if cond_keys:
+        ws_hr = wb.create_sheet(title="Conditional Cox HRs")
+        ws_hr["A1"] = "Conditional Cox Hazard Ratios (Native Hazard-Scale Estimands)"
+        ws_hr["A1"].font = font_title
+        ws_hr["A2"] = "Landmark Cox & Time-Dependent Cox estimate conditional HRs only (baseline t=0 marginal RD/RMSTD are N/A)"
+        ws_hr["A2"].font = font_italic
+
+        hr_headers = [
+            "Scenario", "Spec Group", "Regime", "Estimator", "Reps",
+            "Cond HR Mean", "Cond HR EmpSD", "Cond HR CI Width"
+        ]
+        r_idx = 4
+        for c_i, h in enumerate(hr_headers, start=1):
+            c = ws_hr.cell(row=r_idx, column=c_i, value=h)
+            c.font = font_header
+            c.fill = fill_slate
+            c.alignment = align_center
+            c.border = border_header
+        ws_hr.row_dimensions[r_idx].height = 25
+
+        for k in cond_keys:
+            r_list = grouped[k]
+            vals_hr = [safe_float(x.get("hr_cond_est")) for x in r_list if safe_float(x.get("hr_cond_est")) is not None]
+            vals_w = [safe_float(x.get("hr_cond_ci_width")) for x in r_list if safe_float(x.get("hr_cond_ci_width")) is not None]
+            m_hr = sum(vals_hr) / len(vals_hr) if vals_hr else None
+            sd_hr = math.sqrt(sum((v - m_hr) ** 2 for v in vals_hr) / (len(vals_hr) - 1)) if len(vals_hr) > 1 else None
+            m_w = sum(vals_w) / len(vals_w) if vals_w else None
+            r_idx += 1
+            out_vals = [
+                k[0], k[1], k[2], k[3], len(r_list),
+                round(m_hr, 4) if m_hr is not None else "N/A",
+                round(sd_hr, 4) if sd_hr is not None else "N/A",
+                round(m_w, 4) if m_w is not None else "N/A",
+            ]
+            for c_i, val in enumerate(out_vals, start=1):
+                cell = ws_hr.cell(row=r_idx, column=c_i, value=val)
+                cell.font = font_regular
+                cell.border = border_thin
+                cell.alignment = align_left if c_i <= 4 else align_center
+
+    # -------------------------------------------------------------
     # 2. RUNTIME BENCHMARKS TAB
     # -------------------------------------------------------------
     ws_time = wb.create_sheet(title="Runtime Benchmarks")

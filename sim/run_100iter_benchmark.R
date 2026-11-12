@@ -4,7 +4,7 @@
 #'   (8 scenarios x 100 datasets = 800 datasets).
 #'   On each dataset:
 #'   - Non-parametric estimators (TTE-TMLE SuperLearner, G-COMP BART, TMLE + BART) are fit ONCE.
-#'   - Parametric benchmarks (Naive Cox, Landmark Cox, TD-Cox, Time-Matched Cox, CCW-CPHM, CCW-KM)
+#'   - Parametric benchmarks (Time-Matched Cox + CCW-KM for baseline survival; Landmark Cox & TD-Cox for conditional HR only)
 #'     are fit under Correct and Misspecified functional forms (never omitting variables).
 #'   - TTE-TMLE (GLM) is fit across all 4 specification regimes (Corr/Mis Q x Corr/Mis g).
 

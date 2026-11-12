@@ -134,11 +134,13 @@ run_simulation_dataset <- function(scenario_num = 1,
                                    tau = 30,
                                    grace_period = 10,
                                    seed = 42,
-                                   bart_trees = 30,
-                                   bart_ndpost = 100,
-                                   bart_nskip = 100,
-                                   bart_thin = 2,
+                                   bart_trees = 50,
+                                   bart_ndpost = 250,
+                                   bart_nskip = 250,
+                                   bart_thin = 4,
+                                   bart_chains = 4L,
                                    fast_only = FALSE,
+                                   cox_only = FALSE,
                                    truth_precomp = NULL) {
   if (!is.null(seed)) set.seed(seed)
 
@@ -155,7 +157,7 @@ run_simulation_dataset <- function(scenario_num = 1,
   covars_all <- spec$covars_all
 
   df_std <- prepare_tte_data(df_raw)
-  clones <- create_clones(df_std, covars = covars_all, grace_period = grace_period, tau = tau)
+  clones <- if (!cox_only) create_clones(df_std, covars = covars_all, grace_period = grace_period, tau = tau) else NULL
 
   # True scalar estimands
   rd_true_15 <- truth$rd_true[min(15, length(truth$rd_true))]
@@ -186,14 +188,21 @@ run_simulation_dataset <- function(scenario_num = 1,
                        spec_group,
                        regime_id,
                        elapsed_sec,
-                       rd15, se15, ci15_l = rd15 - 1.96 * se15, ci15_u = rd15 + 1.96 * se15,
-                       rd30, se30, ci30_l = rd30 - 1.96 * se30, ci30_u = rd30 + 1.96 * se30,
+                       rd15 = NA_real_, se15 = NA_real_,
+                       ci15_l = if (is.na(rd15) || is.na(se15)) NA_real_ else rd15 - 1.96 * se15,
+                       ci15_u = if (is.na(rd15) || is.na(se15)) NA_real_ else rd15 + 1.96 * se15,
+                       rd30 = NA_real_, se30 = NA_real_,
+                       ci30_l = if (is.na(rd30) || is.na(se30)) NA_real_ else rd30 - 1.96 * se30,
+                       ci30_u = if (is.na(rd30) || is.na(se30)) NA_real_ else rd30 + 1.96 * se30,
                        band30_l = NA_real_, band30_u = NA_real_,
-                       rmstd, se_rmstd, rmstd_l = rmstd - 1.96 * se_rmstd, rmstd_u = rmstd + 1.96 * se_rmstd,
-                       hr, hr_l, hr_u,
+                       rmstd = NA_real_, se_rmstd = NA_real_,
+                       rmstd_l = if (is.na(rmstd) || is.na(se_rmstd)) NA_real_ else rmstd - 1.96 * se_rmstd,
+                       rmstd_u = if (is.na(rmstd) || is.na(se_rmstd)) NA_real_ else rmstd + 1.96 * se_rmstd,
+                       hr = NA_real_, hr_l = NA_real_, hr_u = NA_real_,
+                       hr_cond = NA_real_, hr_cond_l = NA_real_, hr_cond_u = NA_real_,
                        band_cov = list(unif = NA_integer_, prop = NA_real_, width = NA_real_)) {
-    z30 <- rd30 / pmax(se30, 1e-4)
-    p30 <- 2 * (1 - stats::pnorm(abs(z30)))
+    z30 <- if (is.na(rd30) || is.na(se30)) NA_real_ else rd30 / pmax(se30, 1e-4)
+    p30 <- if (is.na(z30)) NA_real_ else 2 * (1 - stats::pnorm(abs(z30)))
     tibble(
       estimator = estimator,
       spec_group = spec_group,
@@ -201,22 +210,22 @@ run_simulation_dataset <- function(scenario_num = 1,
       elapsed_sec = elapsed_sec,
       # RD(15)
       rd_15_est = rd15,
-      rd_15_true = rd_true_15,
-      bias_15 = rd15 - rd_true_15,
+      rd_15_true = if (is.na(rd15)) NA_real_ else rd_true_15,
+      bias_15 = if (is.na(rd15)) NA_real_ else rd15 - rd_true_15,
       se_15 = se15,
       ci_lower_15 = ci15_l,
       ci_upper_15 = ci15_u,
-      covered_15 = as.integer(!is.na(ci15_l) & !is.na(ci15_u) & ci15_l <= rd_true_15 & rd_true_15 <= ci15_u),
+      covered_15 = if (is.na(rd15) || is.na(ci15_l) || is.na(ci15_u)) NA_integer_ else as.integer(ci15_l <= rd_true_15 & rd_true_15 <= ci15_u),
       ci_width_15 = ci15_u - ci15_l,
       # RD(30)
       rd_30_est = rd30,
-      rd_30_true = rd_true_30,
-      bias_30 = rd30 - rd_true_30,
-      rel_bias_30 = (rd30 - rd_true_30) / rd_true_30 * 100,
+      rd_30_true = if (is.na(rd30)) NA_real_ else rd_true_30,
+      bias_30 = if (is.na(rd30)) NA_real_ else rd30 - rd_true_30,
+      rel_bias_30 = if (is.na(rd30)) NA_real_ else (rd30 - rd_true_30) / rd_true_30 * 100,
       se_30 = se30,
       ci_lower_30 = ci30_l,
       ci_upper_30 = ci30_u,
-      covered_30 = as.integer(!is.na(ci30_l) & !is.na(ci30_u) & ci30_l <= rd_true_30 & rd_true_30 <= ci30_u),
+      covered_30 = if (is.na(rd30) || is.na(ci30_l) || is.na(ci30_u)) NA_integer_ else as.integer(ci30_l <= rd_true_30 & rd_true_30 <= ci30_u),
       ci_width_30 = ci30_u - ci30_l,
       band_lower_30 = band30_l,
       band_upper_30 = band30_u,
@@ -231,16 +240,21 @@ run_simulation_dataset <- function(scenario_num = 1,
       rmstd_ci_width = rmstd_u - rmstd_l,
       # Marginal HR(30)
       hr_marginal_est = hr,
-      hr_marginal_true = hr_marg_true_30,
-      hr_marginal_bias = hr - hr_marg_true_30,
+      hr_marginal_true = if (is.na(hr)) NA_real_ else hr_marg_true_30,
+      hr_marginal_bias = if (is.na(hr)) NA_real_ else hr - hr_marg_true_30,
       hr_ci_lower_30 = hr_l,
       hr_ci_upper_30 = hr_u,
-      hr_covered_30 = as.integer(!is.na(hr_l) & !is.na(hr_u) & hr_l <= hr_marg_true_30 & hr_marg_true_30 <= hr_u),
+      hr_covered_30 = if (is.na(hr) || is.na(hr_l) || is.na(hr_u)) NA_integer_ else as.integer(hr_l <= hr_marg_true_30 & hr_marg_true_30 <= hr_u),
       hr_ci_width_30 = hr_u - hr_l,
+      # Conditional Cox HR (where applicable; NA for marginal-only estimators)
+      hr_cond_est = hr_cond,
+      hr_cond_ci_lower = hr_cond_l,
+      hr_cond_ci_upper = hr_cond_u,
+      hr_cond_ci_width = hr_cond_u - hr_cond_l,
       # Hypothesis testing & Simultaneous band diagnostics
       z_stat_30 = z30,
       p_val_30 = p30,
-      reject_H0 = as.integer(p30 < 0.05),
+      reject_H0 = if (is.na(p30)) NA_integer_ else as.integer(p30 < 0.05),
       uniform_band_covered = band_cov$unif,
       prop_time_points_covered = band_cov$prop,
       mean_band_width = band_cov$width
@@ -275,71 +289,30 @@ run_simulation_dataset <- function(scenario_num = 1,
     pf <- ps$p_form
     qf <- ps$q_form
 
-    # 1. Naive Cox
-    t0 <- proc.time()["elapsed"]
-    fit_naive <- fit_naive_cox(df_std, covars = covars_all, q_form = qf)
-    t_naive <- as.numeric(proc.time()["elapsed"] - t0)
-
-    hr_naive <- unname(exp(stats::coef(fit_naive)["tx_ever"]))
-    ci_hr_naive <- unname(exp(suppressWarnings(stats::confint(fit_naive))["tx_ever", ]))
-    sf_naive <- survival::survfit(
-      fit_naive,
-      newdata = data.frame(tx_ever = c(0, 1), x1 = 0, w1 = 3, w2 = 0, w_prog = 0, x2 = 0)
-    )
-    s_naive_all <- summary(sf_naive, times = seq_len(tau), extend = TRUE)
-    surv_mat_naive <- s_naive_all$surv
-    se_mat_naive <- s_naive_all$std.err
-    rd_vec_naive <- as.numeric(surv_mat_naive[, 2] - surv_mat_naive[, 1])
-    rd15_naive <- rd_vec_naive[15]
-    rd30_naive <- rd_vec_naive[tau]
-    se15_naive <- as.numeric(sqrt(se_mat_naive[15, 2]^2 + se_mat_naive[15, 1]^2))
-    se30_naive <- as.numeric(sqrt(se_mat_naive[tau, 2]^2 + se_mat_naive[tau, 1]^2))
-    rmstd_naive <- sum(rd_vec_naive, na.rm = TRUE)
-    se_rmstd_naive <- se30_naive * (tau * 0.6)
-
-    rows[[length(rows) + 1L]] <- make_row(
-      estimator = "Naive Cox",
-      spec_group = sg,
-      regime_id = rid,
-      elapsed_sec = t_naive,
-      rd15 = rd15_naive, se15 = se15_naive,
-      rd30 = rd30_naive, se30 = se30_naive,
-      rmstd = rmstd_naive, se_rmstd = se_rmstd_naive,
-      hr = hr_naive, hr_l = ci_hr_naive[1], hr_u = ci_hr_naive[2]
-    )
-
-    # 2. Landmark Cox (RMSTD = NA since landmark excludes Days 1..10)
+    # 1. Landmark Cox (Conditional post-landmark HR only; baseline marginal RD/RMSTD/HR undefined)
     t0 <- proc.time()["elapsed"]
     fit_lm <- fit_landmark_cox(df_std, landmark_time = grace_period, covars = covars_all, tau = tau, q_form = qf)
     t_lm <- as.numeric(proc.time()["elapsed"] - t0)
 
     coef_lm <- stats::coef(fit_lm)
-    hr_lm <- if ("tx_landmark" %in% names(coef_lm)) unname(exp(coef_lm["tx_landmark"])) else 1.0
-    ci_hr_lm <- if ("tx_landmark" %in% names(coef_lm)) unname(exp(suppressWarnings(stats::confint(fit_lm))["tx_landmark", ])) else c(NA_real_, NA_real_)
-    sf_lm <- survival::survfit(
-      fit_lm,
-      newdata = data.frame(tx_landmark = c(0, 1), x1 = 0, w1 = 3, w2 = 0, w_prog = 0, x2 = 0)
-    )
-    s_lm_tau <- summary(sf_lm, times = c(15 - grace_period, tau - grace_period), extend = TRUE)
-    surv_mat_lm <- s_lm_tau$surv
-    se_mat_lm <- s_lm_tau$std.err
-    rd15_lm <- if (is.matrix(surv_mat_lm) && nrow(surv_mat_lm) >= 1) as.numeric(surv_mat_lm[1, 2] - surv_mat_lm[1, 1]) else 0
-    rd30_lm <- if (is.matrix(surv_mat_lm) && nrow(surv_mat_lm) >= 2) as.numeric(surv_mat_lm[2, 2] - surv_mat_lm[2, 1]) else 0
-    se15_lm <- if (is.matrix(se_mat_lm) && nrow(se_mat_lm) >= 1) as.numeric(sqrt(se_mat_lm[1, 2]^2 + se_mat_lm[1, 1]^2)) else 0.03
-    se30_lm <- if (is.matrix(se_mat_lm) && nrow(se_mat_lm) >= 2) as.numeric(sqrt(se_mat_lm[2, 2]^2 + se_mat_lm[2, 1]^2)) else 0.05
+    hr_lm_cond <- if ("tx_landmark" %in% names(coef_lm)) unname(exp(coef_lm["tx_landmark"])) else NA_real_
+    ci_hr_lm_cond <- if ("tx_landmark" %in% names(coef_lm)) {
+      unname(exp(suppressWarnings(stats::confint(fit_lm))["tx_landmark", ]))
+    } else {
+      c(NA_real_, NA_real_)
+    }
 
     rows[[length(rows) + 1L]] <- make_row(
       estimator = "Landmark Cox",
       spec_group = sg,
       regime_id = rid,
       elapsed_sec = t_lm,
-      rd15 = rd15_lm, se15 = se15_lm,
-      rd30 = rd30_lm, se30 = se30_lm,
-      rmstd = NA_real_, se_rmstd = NA_real_, rmstd_l = NA_real_, rmstd_u = NA_real_,
-      hr = hr_lm, hr_l = ci_hr_lm[1], hr_u = ci_hr_lm[2]
+      hr_cond = hr_lm_cond,
+      hr_cond_l = ci_hr_lm_cond[1],
+      hr_cond_u = ci_hr_lm_cond[2]
     )
 
-    # 3. Time-Dependent Cox
+    # 2. Time-Dependent Cox (Conditional instantaneous HR only; static grace-period RD/RMSTD/HR undefined)
     t0 <- proc.time()["elapsed"]
     fit_td <- fit_td_cox(df_std, covars = covars_all, tau = tau, grace_period = grace_period, q_form = qf)
     t_td <- as.numeric(proc.time()["elapsed"] - t0)
@@ -349,13 +322,12 @@ run_simulation_dataset <- function(scenario_num = 1,
       spec_group = sg,
       regime_id = rid,
       elapsed_sec = t_td,
-      rd15 = fit_td$rd_15, se15 = fit_td$se_rd_15,
-      rd30 = fit_td$rd_tau, se30 = fit_td$se_rd_tau,
-      rmstd = fit_td$rmstd, se_rmstd = fit_td$se_rmstd,
-      hr = unname(fit_td$hr), hr_l = unname(fit_td$hr_ci[1]), hr_u = unname(fit_td$hr_ci[2])
+      hr_cond = unname(fit_td$hr_cond),
+      hr_cond_l = unname(fit_td$hr_cond_ci[1]),
+      hr_cond_u = unname(fit_td$hr_cond_ci[2])
     )
 
-    # 4. Time-Matched Cox
+    # 3. Time-Matched Cox (Baseline-standardized curves + patient-level nonparametric bootstrap)
     t0 <- proc.time()["elapsed"]
     fit_tm <- fit_time_matched_cox(
       data = df_std,
@@ -364,6 +336,7 @@ run_simulation_dataset <- function(scenario_num = 1,
       q_form = qf,
       tau = tau,
       grace_period = grace_period,
+      n_boot = 200L,
       seed = seed
     )
     t_tm <- as.numeric(proc.time()["elapsed"] - t0)
@@ -376,109 +349,98 @@ run_simulation_dataset <- function(scenario_num = 1,
       rd15 = fit_tm$rd_15, se15 = fit_tm$se_rd_15,
       rd30 = fit_tm$rd_tau, se30 = fit_tm$se_rd_tau,
       rmstd = fit_tm$rmstd, se_rmstd = fit_tm$se_rmstd,
-      hr = unname(fit_tm$hr), hr_l = unname(fit_tm$hr_ci[1]), hr_u = unname(fit_tm$hr_ci[2])
+      hr = unname(fit_tm$hr), hr_l = unname(fit_tm$hr_ci[1]), hr_u = unname(fit_tm$hr_ci[2]),
+      hr_cond = unname(fit_tm$hr_cond), hr_cond_l = unname(fit_tm$hr_cond_ci[1]), hr_cond_u = unname(fit_tm$hr_cond_ci[2])
     )
 
-    # Precompute IPCW weights for pf
-    t0_ipcw <- proc.time()["elapsed"]
-    ipcw_res <- compute_ipcw_weights(
-      clones = clones,
-      covars = covars_all,
-      grace_period = grace_period,
-      dt = 1,
-      p_form = pf,
-      use_sl = FALSE
-    )
-    t_ipcw <- as.numeric(proc.time()["elapsed"] - t0_ipcw)
-    ipcw_cache[[sg]] <- ipcw_res
-    panel_w <- ipcw_res$panel_w
+    if (!cox_only) {
+      # Precompute IPCW weights for pf
+      t0_ipcw <- proc.time()["elapsed"]
+      ipcw_res <- compute_ipcw_weights(
+        clones = clones,
+        covars = covars_all,
+        grace_period = grace_period,
+        dt = 1,
+        p_form = pf,
+        use_sl = FALSE
+      )
+      t_ipcw <- as.numeric(proc.time()["elapsed"] - t0_ipcw)
+      ipcw_cache[[sg]] <- ipcw_res
+      panel_w <- ipcw_res$panel_w
 
-    # 5. CCW-CPHM
-    t0 <- proc.time()["elapsed"]
-    fit_cphm <- fit_ccw_cphm(panel_w, covars = covars_all, tau = tau, q_form = qf)
-    t_cphm <- t_ipcw + as.numeric(proc.time()["elapsed"] - t0)
+      # 4. CCW-KM
+      t0 <- proc.time()["elapsed"]
+      fit_km <- fit_ccw_km(panel_w, tau = tau, n_boot = 2000, seed = seed)
+      t_km <- t_ipcw + as.numeric(proc.time()["elapsed"] - t0)
+      res_km <- fit_km$results
+      band_cov_km <- eval_band_cov(res_km$rd_band_lower, res_km$rd_band_upper, truth$rd_true)
 
-    rows[[length(rows) + 1L]] <- make_row(
-      estimator = "CCW-CPHM",
-      spec_group = sg,
-      regime_id = rid,
-      elapsed_sec = t_cphm,
-      rd15 = fit_cphm$rd_15, se15 = fit_cphm$se_rd_15,
-      rd30 = fit_cphm$rd_tau, se30 = fit_cphm$se_rd_tau,
-      rmstd = fit_cphm$rmstd, se_rmstd = fit_cphm$se_rmstd,
-      hr = unname(fit_cphm$hr), hr_l = unname(fit_cphm$hr_ci[1]), hr_u = unname(fit_cphm$hr_ci[2])
-    )
-
-    # 6. CCW-KM
-    t0 <- proc.time()["elapsed"]
-    fit_km <- fit_ccw_km(panel_w, tau = tau, n_boot = 2000, seed = seed)
-    t_km <- t_ipcw + as.numeric(proc.time()["elapsed"] - t0)
-    res_km <- fit_km$results
-    band_cov_km <- eval_band_cov(res_km$rd_band_lower, res_km$rd_band_upper, truth$rd_true)
-
-    rows[[length(rows) + 1L]] <- make_row(
-      estimator = "CCW-KM",
-      spec_group = sg,
-      regime_id = rid,
-      elapsed_sec = t_km,
-      rd15 = res_km$rd[15], se15 = res_km$se_RD[15],
-      ci15_l = res_km$rd_ci_lower[15], ci15_u = res_km$rd_ci_upper[15],
-      rd30 = res_km$rd[tau], se30 = res_km$se_RD[tau],
-      ci30_l = res_km$rd_ci_lower[tau], ci30_u = res_km$rd_ci_upper[tau],
-      band30_l = res_km$rd_band_lower[tau], band30_u = res_km$rd_band_upper[tau],
-      rmstd = fit_km$rmstd_tau, se_rmstd = fit_km$se_rmstd,
-      hr = fit_km$hr_marginal_tau, hr_l = fit_km$hr_ci_lower_tau, hr_u = fit_km$hr_ci_upper_tau,
-      band_cov = band_cov_km
-    )
+      rows[[length(rows) + 1L]] <- make_row(
+        estimator = "CCW-KM",
+        spec_group = sg,
+        regime_id = rid,
+        elapsed_sec = t_km,
+        rd15 = res_km$rd[15], se15 = res_km$se_RD[15],
+        ci15_l = res_km$rd_ci_lower[15], ci15_u = res_km$rd_ci_upper[15],
+        rd30 = res_km$rd[tau], se30 = res_km$se_RD[tau],
+        ci30_l = res_km$rd_ci_lower[tau], ci30_u = res_km$rd_ci_upper[tau],
+        band30_l = res_km$rd_band_lower[tau], band30_u = res_km$rd_band_upper[tau],
+        rmstd = fit_km$rmstd_tau, se_rmstd = fit_km$se_rmstd,
+        hr = fit_km$hr_marginal_tau, hr_l = fit_km$hr_ci_lower_tau, hr_u = fit_km$hr_ci_upper_tau,
+        band_cov = band_cov_km
+      )
+    }
   }
 
   # =========================================================================
   # PART B: TTE-TMLE (GLM) Across All 4 Regimes (Regimes 1, 2, 3, 4)
   # =========================================================================
-  glm_regimes <- list(
-    list(r = 1L, regime_id = "Regime 1 (Corr Q + Corr g)", spec_group = "Parametric (Correct)",      pf = spec$p_form_corr, qf = spec$q_form_corr),
-    list(r = 2L, regime_id = "Regime 2 (Mis Q + Corr g)",  spec_group = "Parametric (Mis Q + Corr g)", pf = spec$p_form_corr, qf = spec$q_form_mis),
-    list(r = 3L, regime_id = "Regime 3 (Corr Q + Mis g)",  spec_group = "Parametric (Corr Q + Mis g)", pf = spec$p_form_mis,  qf = spec$q_form_corr),
-    list(r = 4L, regime_id = "Regime 4 (Mis Q + Mis g)",   spec_group = "Parametric (Misspecified)", pf = spec$p_form_mis,  qf = spec$q_form_mis)
-  )
-
-  for (gr in glm_regimes) {
-    t0 <- proc.time()["elapsed"]
-    fit_glm <- tte_tmle(
-      data = df_std,
-      grace_period = grace_period,
-      tau = tau,
-      covars = covars_all,
-      p_form = gr$pf,
-      q_form = gr$qf,
-      use_sl = FALSE,
-      n_boot = 2000,
-      seed = seed
+  if (!cox_only) {
+    glm_regimes <- list(
+      list(r = 1L, regime_id = "Regime 1 (Corr Q + Corr g)", spec_group = "Parametric (Correct)",      pf = spec$p_form_corr, qf = spec$q_form_corr),
+      list(r = 2L, regime_id = "Regime 2 (Mis Q + Corr g)",  spec_group = "Parametric (Mis Q + Corr g)", pf = spec$p_form_corr, qf = spec$q_form_mis),
+      list(r = 3L, regime_id = "Regime 3 (Corr Q + Mis g)",  spec_group = "Parametric (Corr Q + Mis g)", pf = spec$p_form_mis,  qf = spec$q_form_corr),
+      list(r = 4L, regime_id = "Regime 4 (Mis Q + Mis g)",   spec_group = "Parametric (Misspecified)", pf = spec$p_form_mis,  qf = spec$q_form_mis)
     )
-    t_glm <- as.numeric(proc.time()["elapsed"] - t0)
-    res_glm <- fit_glm$res_tmle
-    band_cov_glm <- eval_band_cov(res_glm$rd_band_lower, res_glm$rd_band_upper, truth$rd_true)
 
-    rows[[length(rows) + 1L]] <- make_row(
-      estimator = "TTE-TMLE (GLM)",
-      spec_group = gr$spec_group,
-      regime_id = gr$regime_id,
-      elapsed_sec = t_glm,
-      rd15 = res_glm$rd[15], se15 = res_glm$se_RD[15],
-      ci15_l = res_glm$rd_ci_lower[15], ci15_u = res_glm$rd_ci_upper[15],
-      rd30 = res_glm$rd[tau], se30 = res_glm$se_RD[tau],
-      ci30_l = res_glm$rd_ci_lower[tau], ci30_u = res_glm$rd_ci_upper[tau],
-      band30_l = res_glm$rd_band_lower[tau], band30_u = res_glm$rd_band_upper[tau],
-      rmstd = sum(res_glm$rd[1:tau], na.rm = TRUE), se_rmstd = fit_glm$se_rmstd,
-      hr = res_glm$hr_cum[tau], hr_l = res_glm$hr_ci_lower[tau], hr_u = res_glm$hr_ci_upper[tau],
-      band_cov = band_cov_glm
-    )
+    for (gr in glm_regimes) {
+      t0 <- proc.time()["elapsed"]
+      fit_glm <- tte_tmle(
+        data = df_std,
+        grace_period = grace_period,
+        tau = tau,
+        covars = covars_all,
+        p_form = gr$pf,
+        q_form = gr$qf,
+        use_sl = FALSE,
+        n_boot = 2000,
+        seed = seed
+      )
+      t_glm <- as.numeric(proc.time()["elapsed"] - t0)
+      res_glm <- fit_glm$res_tmle
+      band_cov_glm <- eval_band_cov(res_glm$rd_band_lower, res_glm$rd_band_upper, truth$rd_true)
+
+      rows[[length(rows) + 1L]] <- make_row(
+        estimator = "TTE-TMLE (GLM)",
+        spec_group = gr$spec_group,
+        regime_id = gr$regime_id,
+        elapsed_sec = t_glm,
+        rd15 = res_glm$rd[15], se15 = res_glm$se_RD[15],
+        ci15_l = res_glm$rd_ci_lower[15], ci15_u = res_glm$rd_ci_upper[15],
+        rd30 = res_glm$rd[tau], se30 = res_glm$se_RD[tau],
+        ci30_l = res_glm$rd_ci_lower[tau], ci30_u = res_glm$rd_ci_upper[tau],
+        band30_l = res_glm$rd_band_lower[tau], band30_u = res_glm$rd_band_upper[tau],
+        rmstd = sum(res_glm$rd[1:tau], na.rm = TRUE), se_rmstd = fit_glm$se_rmstd,
+        hr = res_glm$hr_cum[tau], hr_l = res_glm$hr_ci_lower[tau], hr_u = res_glm$hr_ci_upper[tau],
+        band_cov = band_cov_glm
+      )
+    }
   }
 
   # =========================================================================
   # PART C: Non-Parametric Estimators (Run ONCE per dataset!)
   # =========================================================================
-  if (!fast_only) {
+  if (!fast_only && !cox_only) {
     # 7 & 8. G-COMP (BART) and TMLE + BART (BART for both g and Q via Python bart-survival v0.2.5)
     bart_pair <- fit_bart_pair(
       data = df_std,
@@ -490,6 +452,7 @@ run_simulation_dataset <- function(scenario_num = 1,
       ndpost = bart_ndpost,
       nskip = bart_nskip,
       thin = bart_thin,
+      chains = bart_chains,
       n_boot = 2000,
       seed = seed
     )
@@ -586,9 +549,11 @@ run_simulation_condition <- function(scenario_num = 1,
                                      grace_period = 10,
                                      seed = 42,
                                      mc_cores = 1,
-                                     bart_trees = 30,
-                                     bart_ndpost = 100,
-                                     bart_nskip = 100,
+                                     bart_trees = 50,
+                                     bart_ndpost = 250,
+                                     bart_nskip = 250,
+                                     bart_thin = 4,
+                                     bart_chains = 4L,
                                      fast_only = FALSE,
                                      truth_precomp = NULL) {
   res <- run_simulation_dataset(
@@ -600,6 +565,8 @@ run_simulation_condition <- function(scenario_num = 1,
     bart_trees = bart_trees,
     bart_ndpost = bart_ndpost,
     bart_nskip = bart_nskip,
+    bart_thin = bart_thin,
+    bart_chains = bart_chains,
     fast_only = fast_only,
     truth_precomp = truth_precomp
   )

@@ -44,6 +44,8 @@ run_python_surv_bart <- function(mode = c("pair", "q_only", "g_only"),
                                  ndpost = 100L,
                                  nskip = 100L,
                                  thin = 2L,
+                                 chains = 1L,
+                                 cores = 1L,
                                  seed = 99L) {
   mode <- match.arg(mode)
   paths <- get_bart_survival_paths()
@@ -61,6 +63,8 @@ run_python_surv_bart <- function(mode = c("pair", "q_only", "g_only"),
     draws = as.integer(ndpost * thin),
     tune = as.integer(nskip),
     thin = as.integer(thin),
+    chains = as.integer(chains),
+    cores = as.integer(cores),
     seed = as.integer(if (is.null(seed)) 99L else seed)
   )
 
@@ -131,27 +135,66 @@ run_python_surv_bart <- function(mode = c("pair", "q_only", "g_only"),
 
 #' Summarize Posterior Counterfactual Hazard Draws for G-COMP (BART)
 #' @keywords internal
-summarize_bart_gcomp_draws <- function(q_cf_draws, n_patients, tau) {
+summarize_bart_gcomp_draws <- function(q_cf_draws,
+                                       n_patients,
+                                       tau,
+                                       w_mat = NULL,
+                                       k_vals = NULL) {
   n_cf <- n_patients * tau
   M <- nrow(q_cf_draws)
 
-  P_ctrl <- q_cf_draws[, seq_len(n_cf), drop = FALSE]
-  P_treat <- q_cf_draws[, (n_cf + 1L):(2L * n_cf), drop = FALSE]
+  P0 <- q_cf_draws[, seq_len(n_cf), drop = FALSE]
+  P1 <- q_cf_draws[, (n_cf + 1L):(2L * n_cf), drop = FALSE]
 
-  dim(P_ctrl) <- c(M, tau, n_patients)
-  dim(P_treat) <- c(M, tau, n_patients)
+  dim(P0) <- c(M, tau, n_patients)
+  dim(P1) <- c(M, tau, n_patients)
 
-  log_1m_ctrl <- log(pmax(1 - P_ctrl, 1e-6))
-  log_1m_treat <- log(pmax(1 - P_treat, 1e-6))
+  log_1m_0 <- log(pmax(1 - P0, 1e-6))
+  log_1m_1 <- log(pmax(1 - P1, 1e-6))
 
-  cum_log_ctrl <- aperm(apply(log_1m_ctrl, c(1, 3), cumsum), c(2, 1, 3))
-  cum_log_treat <- aperm(apply(log_1m_treat, c(1, 3), cumsum), c(2, 1, 3))
+  # Control arm: always untreated (P0) across t = 1..tau
+  log_ctrl <- log_1m_0
+  if (tau > 1L) {
+    for (tt in 2:tau) {
+      log_ctrl[, tt, ] <- log_ctrl[, tt - 1L, ] + log_ctrl[, tt, ]
+    }
+  }
+  S_ctrl_draws <- exp(log_ctrl)
+  marg_ctrl <- rowMeans(S_ctrl_draws, dims = 2L)
 
-  S_ctrl_draws <- exp(cum_log_ctrl)
-  S_treat_draws <- exp(cum_log_treat)
-
-  marg_ctrl <- apply(S_ctrl_draws, c(1, 2), mean)
-  marg_treat <- apply(S_treat_draws, c(1, 2), mean)
+  if (is.null(w_mat) || is.null(k_vals)) {
+    # Legacy fallback when q_cf_draws[, (n_cf+1):(2*n_cf)] already encodes a single regime
+    log_treat <- log_1m_1
+    if (tau > 1L) {
+      for (tt in 2:tau) {
+        log_treat[, tt, ] <- log_treat[, tt - 1L, ] + log_treat[, tt, ]
+      }
+    }
+    S_treat_draws <- exp(log_treat)
+    marg_treat <- rowMeans(S_treat_draws, dims = 2L)
+  } else {
+    # Exact analytical integration over initiation policy weights w_mat (n_patients x n_k)
+    marg_treat <- matrix(0, nrow = M, ncol = tau)
+    for (idx in seq_along(k_vals)) {
+      wk <- w_mat[, idx]
+      if (!any(wk > 0)) next
+      k <- as.integer(k_vals[idx])
+      log_k <- log_1m_0
+      if (k <= 1L) {
+        log_k <- log_1m_1
+      } else if (k <= tau) {
+        log_k[, k:tau, ] <- log_1m_1[, k:tau, ]
+      }
+      if (tau > 1L) {
+        for (tt in 2:tau) {
+          log_k[, tt, ] <- log_k[, tt - 1L, ] + log_k[, tt, ]
+        }
+      }
+      S_k <- exp(log_k)
+      dim(S_k) <- c(M * tau, n_patients)
+      marg_treat <- marg_treat + matrix(as.vector(S_k %*% wk), nrow = M, ncol = tau) / n_patients
+    }
+  }
 
   rd_draws <- marg_treat - marg_ctrl
   rmstd_draws <- rowSums(rd_draws)
@@ -215,34 +258,26 @@ summarize_bart_gcomp_draws <- function(q_cf_draws, n_patients, tau) {
 
 #' Assemble IPCW Panel and Counterfactual Clever Covariates from BART-g Predictions
 #' @keywords internal
-compute_bart_ipcw_and_cf <- function(data,
+compute_bart_ipcw_and_cf <- function(base_ord,
                                      clones,
-                                     cf_base,
                                      g_grid_pred,
                                      covars,
                                      grace_period = 10,
                                      tau = 30,
-                                     trim_quantile = c(0.001, 0.999)) {
-  n_patients <- nrow(data)
-  # g_grid_pred is ordered by patient i (1..n_patients), and within patient i by t = 1..grace_period
-  g_mat <- matrix(bound_precision(g_grid_pred), nrow = grace_period, ncol = n_patients)
-  colnames(g_mat) <- as.character(data$id)
+                                     trim_quantile = c(0.001, 0.999),
+                                     max_weight = 10,
+                                     tx_strategy = c("conditional_complier", "empirical_complier", "natural_grace"),
+                                     align_grace_weights = TRUE) {
+  tx_strategy <- match.arg(tx_strategy)
+  if (!align_grace_weights && tx_strategy != "natural_grace") {
+    tx_strategy <- "natural_grace"
+  }
 
-  # Cumulative probability of initiating treatment within grace_period: 1 - prod_{s=1}^{grace_period} (1 - h_g(s | W_i))
-  surv_no_tx_grace <- apply(1 - g_mat, 2, prod)
-  p_treat_denom_vec <- bound_precision(1 - surv_no_tx_grace)
-  names(p_treat_denom_vec) <- as.character(data$id)
-
-  # Lookup table for (id, t) -> p_ctrl_denom
-  g_lookup <- tibble::tibble(
-    id = rep(data$id, each = grace_period),
-    t = rep(seq_len(grace_period), times = n_patients),
-    p_ctrl_denom_bart = as.vector(g_mat)
-  )
-  treat_lookup <- tibble::tibble(
-    id = data$id,
-    p_treat_denom_bart = as.numeric(p_treat_denom_vec)
-  )
+  n_patients <- nrow(base_ord)
+  n_grace_int <- max(as.integer(grace_period), 1L)
+  # g_grid_pred is ordered by sorted patient id (base_ord), and within patient by t = 1..n_grace_int
+  g_mat <- matrix(bound_precision(g_grid_pred), nrow = n_grace_int, ncol = n_patients)
+  colnames(g_mat) <- as.character(base_ord$id)
 
   # Marginal stabilization numerators (matching compute_ipcw_weights)
   obs_panel <- clones %>%
@@ -253,7 +288,6 @@ compute_bart_ipcw_and_cf <- function(data,
     ) %>%
     tidyr::uncount(weights = n_int, .id = "t") %>%
     dplyr::mutate(
-      t_sq = t^2,
       event_tx = dplyr::if_else(tx_ever == 1L & t == t_switch & time >= t_switch & t <= grace_period, 1L, 0L)
     )
 
@@ -261,8 +295,28 @@ compute_bart_ipcw_and_cf <- function(data,
     dplyr::filter(arm == "treat_tx", time > grace_period) %>%
     dplyr::mutate(took_tx = dplyr::if_else(tx_ever == 1L & t_switch <= grace_period, 1L, 0L))
 
-  m_num_ctrl <- suppressWarnings(stats::glm(event_tx ~ t + t_sq, family = stats::binomial(), data = obs_panel))
+  df_t <- min(3L, max(n_grace_int - 1L, 1L))
+  num_ctrl_form <- stats::as.formula(paste("event_tx ~ splines::ns(t, df =", df_t, ")"))
+  m_num_ctrl <- suppressWarnings(stats::glm(num_ctrl_form, family = stats::binomial(), data = obs_panel))
   m_num_treat <- suppressWarnings(stats::glm(took_tx ~ 1, family = stats::binomial(), data = treat_day10_data))
+
+  grace_surv <- compute_grace_survival_grid(
+    data_patients = base_ord,
+    covars = covars,
+    grace_period = grace_period,
+    dt = 1,
+    m_denom_ctrl = NULL,
+    m_num_ctrl = m_num_ctrl,
+    use_sl = FALSE,
+    g_mat_override = g_mat
+  )
+  p_star <- compute_empirical_complier_probs(
+    clones = clones,
+    grace_period = grace_period,
+    n_grace_int = grace_surv$n_grace_int
+  )
+  p_treat_denom_vec <- bound_precision(1 - grace_surv$S_denom_mat[, grace_surv$n_grace_int])
+  p_treat_num_vec <- bound_precision(stats::predict(m_num_treat, newdata = base_ord, type = "response"))
 
   # Expand clones into longitudinal person-time panel
   panel <- clones %>%
@@ -271,75 +325,76 @@ compute_bart_ipcw_and_cf <- function(data,
     dplyr::mutate(
       t0 = t - 1L,
       t1 = t,
-      t_sq = t^2,
       event_cc_day = dplyr::if_else(event_cc == 1L & time_cc > t0 & time_cc <= t1, 1L, 0L),
       is_treated = dplyr::if_else(tx_ever == 1L & t >= t_switch, 1L, 0L)
     ) %>%
-    dplyr::left_join(g_lookup, by = c("id", "t")) %>%
-    dplyr::left_join(treat_lookup, by = "id") %>%
-    dplyr::mutate(
-      p_ctrl_denom = bound_precision(dplyr::coalesce(p_ctrl_denom_bart, 0.01)),
-      p_ctrl_num = bound_precision(stats::predict(m_num_ctrl, newdata = ., type = "response")),
-      p_treat_denom = bound_precision(p_treat_denom_bart),
-      p_treat_num = bound_precision(stats::predict(m_num_treat, newdata = ., type = "response"))
-    ) %>%
-    dplyr::mutate(
-      w_inc = dplyr::case_when(
-        arm == "control_no_tx" & t <= grace_period ~ (1 - p_ctrl_num) / (1 - p_ctrl_denom),
-        arm == "control_no_tx" ~ 1,
-        arm == "treat_tx" & t == grace_period + 1L ~ p_treat_num / p_treat_denom,
-        TRUE ~ 1
-      ),
-      w_inc_unstab = dplyr::case_when(
-        arm == "control_no_tx" & t <= grace_period ~ 1 / (1 - p_ctrl_denom),
-        arm == "control_no_tx" ~ 1,
-        arm == "treat_tx" & t == grace_period + 1L ~ 1 / p_treat_denom,
-        TRUE ~ 1
-      )
-    ) %>%
-    dplyr::arrange(id, clone_arm, t) %>%
-    dplyr::group_by(clone_id) %>%
-    dplyr::mutate(
-      w_ipcw_time = cumprod(w_inc),
-      w_unstab_time = cumprod(w_inc_unstab)
-    ) %>%
-    dplyr::ungroup()
+    dplyr::arrange(id, clone_arm, t)
 
-  q_lim <- stats::quantile(panel$w_ipcw_time, probs = trim_quantile, na.rm = TRUE)
-  q_lim_unstab <- stats::quantile(panel$w_unstab_time, probs = trim_quantile, na.rm = TRUE)
+  panel <- compute_arm_ipcw_weights(
+    df_panel = panel,
+    grace_surv = grace_surv,
+    covars = covars,
+    grace_period = grace_period,
+    m_denom_treat = NULL,
+    m_num_treat = m_num_treat,
+    use_sl = FALSE,
+    tx_strategy = tx_strategy,
+    p_star = p_star,
+    p_treat_denom_vec = p_treat_denom_vec,
+    p_treat_num_vec = p_treat_num_vec,
+    is_cf = FALSE
+  ) %>%
+    dplyr::mutate(
+      w_ipcw_time = w_stab,
+      w_unstab_time = w_unstab
+    )
+
+  q_lim <- compute_arm_trim_bounds(panel$w_ipcw_time, panel$arm, probs = trim_quantile, max_weight = max_weight)
+  q_lim_unstab <- compute_arm_trim_bounds(
+    panel$w_unstab_time,
+    panel$arm,
+    probs = trim_quantile,
+    max_weight = if (is.finite(max_weight)) 2 * max_weight else Inf
+  )
 
   panel_w <- panel %>%
     dplyr::mutate(
-      w_trim = pmin(pmax(w_ipcw_time, q_lim[1]), q_lim[2]),
-      w_unstab_trim = pmin(pmax(w_unstab_time, q_lim_unstab[1]), q_lim_unstab[2]),
+      w_trim = apply_arm_weight_trimming(w_ipcw_time, arm, q_lim),
+      w_unstab_trim = apply_arm_weight_trimming(w_unstab_time, arm, q_lim_unstab),
       post_grace = dplyr::if_else(t > grace_period, 1L, 0L)
     )
 
-  # Counterfactual clever covariates cf_H on cf_base (t = 1..tau for each patient)
-  cf_grid <- cf_base %>%
-    dplyr::mutate(t_sq = t^2) %>%
-    dplyr::left_join(g_lookup, by = c("id", "t")) %>%
-    dplyr::left_join(treat_lookup, by = "id") %>%
-    dplyr::mutate(
-      cf_p_ctrl_denom = bound_precision(dplyr::coalesce(p_ctrl_denom_bart, 0.01)),
-      cf_p_ctrl_num = bound_precision(stats::predict(m_num_ctrl, newdata = ., type = "response")),
-      cf_p_treat_denom = bound_precision(p_treat_denom_bart),
-      cf_p_treat_num = bound_precision(stats::predict(m_num_treat, newdata = ., type = "response")),
-      w_inc_ctrl = dplyr::if_else(t <= grace_period, (1 - cf_p_ctrl_num) / (1 - cf_p_ctrl_denom), 1),
-      w_inc_treat = dplyr::if_else(t == grace_period + 1L, cf_p_treat_num / cf_p_treat_denom, 1)
-    ) %>%
-    dplyr::group_by(id) %>%
-    dplyr::mutate(
-      cf_H_ctrl = pmin(pmax(cumprod(w_inc_ctrl), q_lim[1]), q_lim[2]),
-      cf_H_treat = pmin(pmax(cumprod(w_inc_treat), q_lim[1]), q_lim[2])
-    ) %>%
-    dplyr::ungroup()
+  strat <- compute_tx_strategy_weights(
+    grace_surv = grace_surv,
+    tx_strategy = tx_strategy,
+    p_star = p_star
+  )
+  cf_w <- compute_cf_weight_matrices(
+    grace_surv = grace_surv,
+    data_patients = base_ord,
+    covars = covars,
+    grace_period = grace_period,
+    tau = tau,
+    tx_strategy = tx_strategy,
+    k_vals = strat$k_vals,
+    q_lim = q_lim,
+    m_denom_treat = NULL,
+    m_num_treat = m_num_treat,
+    use_sl = FALSE,
+    p_star = p_star,
+    p_treat_denom_vec = p_treat_denom_vec,
+    p_treat_num_vec = p_treat_num_vec
+  )
 
   list(
     panel_w = panel_w,
-    cf_H_ctrl = cf_grid$cf_H_ctrl,
-    cf_H_treat = cf_grid$cf_H_treat,
-    q_lim = q_lim
+    grace_surv = grace_surv,
+    strat = strat,
+    cf_H_ctrl = cf_w$cf_H_ctrl,
+    cf_H_treat_list = cf_w$cf_H_treat_list,
+    q_lim = q_lim,
+    tx_strategy = tx_strategy,
+    p_star = p_star
   )
 }
 
@@ -354,11 +409,19 @@ compute_bart_ipcw_and_cf <- function(data,
 #' @param covars Character vector of baseline covariate column names.
 #' @param grace_period Numeric grace period duration (default 10).
 #' @param tau Follow-up time horizon (default 30).
-#' @param ntree Number of trees in the BART ensemble (default 30 for fast bart-survival).
-#' @param ndpost Number of retained posterior draws (default 100, i.e., 200 draws with thin = 2).
-#' @param nskip Number of burn-in tune iterations (default 100).
-#' @param thin Thinning factor (default 2).
+#' @param ntree Number of trees in the BART ensemble (default 50, matching \code{SurvBART.preset_standard()}).
+#' @param ndpost Number of retained posterior draws per chain (default 250, i.e., 1,000 total draws with thin = 4).
+#' @param nskip Number of burn-in tune iterations per chain (default 250).
+#' @param thin Thinning factor (default 4).
+#' @param chains Number of MCMC chains in Python \code{SurvBART} (default 4).
+#' @param cores Number of worker cores inside Python \code{SurvBART} (default 1).
 #' @param n_boot Multiplier bootstrap replicates (default 5000).
+#' @param tx_strategy Treatment-arm grace-period policy: \code{"conditional_complier"} (default),
+#'   \code{"empirical_complier"}, or \code{"natural_grace"}.
+#' @param align_grace_weights Legacy alias: if \code{FALSE}, overrides \code{tx_strategy} to
+#'   \code{"natural_grace"}.
+#' @param max_weight Hard upper cap applied after quantile trimming on stabilized IPCW weights
+#'   (default 10; \code{Inf} disables hard capping).
 #' @param seed Optional random seed.
 #' @return A list with elements \code{gcomp} (output matching \code{fit_bart_gcomp}) and
 #'   \code{tmle} (output matching \code{fit_bart_tmle}).
@@ -368,13 +431,28 @@ fit_bart_pair <- function(data,
                           covars = c("w1", "w2"),
                           grace_period = 10,
                           tau = 30,
-                          ntree = 30,
-                          ndpost = 100,
-                          nskip = 100,
-                          thin = 2,
+                          ntree = 50,
+                          ndpost = 250,
+                          nskip = 250,
+                          thin = 4,
+                          chains = 4L,
+                          cores = 1L,
                           n_boot = 5000,
+                          tx_strategy = c("conditional_complier", "empirical_complier", "natural_grace"),
+                          align_grace_weights = TRUE,
+                          max_weight = 10,
                           seed = NULL) {
   if (!is.null(seed)) set.seed(seed)
+  tx_strategy <- match.arg(tx_strategy)
+  if (!align_grace_weights && tx_strategy != "natural_grace") {
+    tx_strategy <- "natural_grace"
+  }
+
+  base_ord <- data %>%
+    dplyr::distinct(id, .keep_all = TRUE) %>%
+    dplyr::arrange(id)
+  n_patients <- nrow(base_ord)
+  n_grace_int <- max(as.integer(grace_period), 1L)
 
   # 1. Build grace-period treatment initiation training panel for BART-g
   obs_panel_g <- clones %>%
@@ -393,10 +471,10 @@ fit_bart_pair <- function(data,
     as.matrix()
   Y_g_train <- obs_panel_g$event_tx
 
-  # Prediction grid for BART-g: every patient i across t = 1..grace_period
-  g_grid <- data %>%
+  # Prediction grid for BART-g: every sorted patient i across t = 1..n_grace_int
+  g_grid <- base_ord %>%
     dplyr::select(id, dplyr::all_of(covars)) %>%
-    tidyr::uncount(weights = grace_period, .id = "t")
+    tidyr::uncount(weights = n_grace_int, .id = "t")
   X_g_test <- g_grid %>%
     dplyr::select(t, dplyr::all_of(covars)) %>%
     as.matrix()
@@ -417,31 +495,22 @@ fit_bart_pair <- function(data,
   Y_q_train <- panel_q$event_cc_day
   n_train <- nrow(X_q_train)
 
-  # 3. Build counterfactual test grids (1..tau per patient)
-  complier_times <- clones %>%
-    dplyr::filter(arm == "treat_tx" & tx_ever == 1L & t_switch <= grace_period) %>%
-    dplyr::pull(t_switch)
-  if (length(complier_times) == 0) complier_times <- grace_period
-
-  cf_base <- data %>%
-    dplyr::select(id, dplyr::all_of(covars), tx_ever, t_switch) %>%
-    dplyr::mutate(sampled_t = sample(complier_times, dplyr::n(), replace = TRUE)) %>%
+  # 3. Build pure untreated (is_treated = 0) and pure treated (is_treated = 1) grids on sorted patients
+  cf_base <- base_ord %>%
+    dplyr::select(id, dplyr::all_of(covars)) %>%
     tidyr::uncount(weights = tau, .id = "t")
 
-  cf_ctrl <- cf_base %>%
+  cf_0 <- cf_base %>%
     dplyr::mutate(is_treated = 0L) %>%
     dplyr::select(t, dplyr::all_of(covars), is_treated) %>%
     as.matrix()
 
-  cf_treat <- cf_base %>%
-    dplyr::mutate(
-      t_sw = dplyr::if_else(tx_ever == 1L & t_switch <= grace_period, t_switch, sampled_t),
-      is_treated = dplyr::if_else(t >= t_sw, 1L, 0L)
-    ) %>%
+  cf_1 <- cf_base %>%
+    dplyr::mutate(is_treated = 1L) %>%
     dplyr::select(t, dplyr::all_of(covars), is_treated) %>%
     as.matrix()
 
-  X_q_test <- rbind(X_q_train, cf_ctrl, cf_treat)
+  X_q_test <- rbind(X_q_train, cf_0, cf_1)
 
   # 4. Run Python bart-survival for both g and Q
   t0_py <- proc.time()["elapsed"]
@@ -458,39 +527,45 @@ fit_bart_pair <- function(data,
     ndpost = ndpost,
     nskip = nskip,
     thin = thin,
+    chains = chains,
+    cores = cores,
     seed = if (is.null(seed)) 99L else as.integer(seed)
   )
   t_py_elapsed <- as.numeric(proc.time()["elapsed"] - t0_py)
 
-  # 5. Evaluate G-COMP (BART) in R from posterior counterfactual draws
-  t0_gcomp <- proc.time()["elapsed"]
-  n_patients <- nrow(data)
-  gcomp_res <- summarize_bart_gcomp_draws(
-    q_cf_draws = py_out$q_cf_draws,
-    n_patients = n_patients,
-    tau = tau
-  )
-  gcomp_res$elapsed_sec <- 0.5 * t_py_elapsed + as.numeric(proc.time()["elapsed"] - t0_gcomp)
-
-  # 6. Evaluate TMLE + BART in R (BART-g IPCW weights + BART-Q initial hazards + logistic targeting + EIC)
+  # 5. Assemble IPCW weights, policy mixture weights w_k(W_i), and cf_H matrices from BART-g
   t0_tmle <- proc.time()["elapsed"]
   ipcw_bart <- compute_bart_ipcw_and_cf(
-    data = data,
+    base_ord = base_ord,
     clones = clones,
-    cf_base = cf_base,
     g_grid_pred = py_out$g_pred_mean,
     covars = covars,
     grace_period = grace_period,
-    tau = tau
+    tau = tau,
+    max_weight = max_weight,
+    tx_strategy = tx_strategy,
+    align_grace_weights = align_grace_weights
   )
-  panel_w <- ipcw_bart$panel_w
 
+  # 6. Evaluate G-COMP (BART) in R via analytical integration across k_vals
+  t0_gcomp <- proc.time()["elapsed"]
+  gcomp_res <- summarize_bart_gcomp_draws(
+    q_cf_draws = py_out$q_cf_draws,
+    n_patients = n_patients,
+    tau = tau,
+    w_mat = ipcw_bart$strat$w_mat,
+    k_vals = ipcw_bart$strat$k_vals
+  )
+  gcomp_res$tx_strategy <- ipcw_bart$tx_strategy
+  gcomp_res$elapsed_sec <- 0.5 * t_py_elapsed + as.numeric(proc.time()["elapsed"] - t0_gcomp)
+
+  # 7. Evaluate TMLE + BART in R (BART-Q initial hazards + logistic targeting + analytical integration + EIC)
+  panel_w <- ipcw_bart$panel_w
   n_cf <- nrow(cf_base)
   Q_init_train <- py_out$q_train_mean
-  Q_init_ctrl_cf <- colMeans(py_out$q_cf_draws[, seq_len(n_cf), drop = FALSE])
-  Q_init_treat_cf <- colMeans(py_out$q_cf_draws[, (n_cf + 1L):(2L * n_cf), drop = FALSE])
+  Q_init_0 <- colMeans(py_out$q_cf_draws[, seq_len(n_cf), drop = FALSE])
+  Q_init_1 <- colMeans(py_out$q_cf_draws[, (n_cf + 1L):(2L * n_cf), drop = FALSE])
 
-  # TMLE logistic fluctuation step in R
   targ_res <- target_hazard(
     panel_w = panel_w,
     pred_Q_init = Q_init_train,
@@ -501,29 +576,51 @@ fit_bart_pair <- function(data,
   eps_treat_pre <- targ_res$eps_treat_pre
   eps_treat_post <- targ_res$eps_treat_post
 
-  # Update counterfactual hazards using BART-g clever covariates cf_H
-  Q_star_ctrl <- stats::plogis(
-    stats::qlogis(bound_precision(Q_init_ctrl_cf)) + eps_ctrl * ipcw_bart$cf_H_ctrl
-  )
-  Q_star_treat <- stats::plogis(
-    stats::qlogis(bound_precision(Q_init_treat_cf)) +
-      ifelse(cf_base$t <= grace_period, eps_treat_pre, eps_treat_post) * ipcw_bart$cf_H_treat
-  )
+  Q0_logit_mat <- stats::qlogis(bound_precision(matrix(Q_init_0, nrow = n_patients, ncol = tau, byrow = TRUE)))
+  Q1_logit_mat <- stats::qlogis(bound_precision(matrix(Q_init_1, nrow = n_patients, ncol = tau, byrow = TRUE)))
 
-  dim(Q_star_ctrl) <- c(tau, n_patients)
-  dim(Q_star_treat) <- c(tau, n_patients)
+  # Control arm fluctuated hazards & cumulative survival (n_patients x tau)
+  Q_star_ctrl <- stats::plogis(Q0_logit_mat + eps_ctrl * ipcw_bart$cf_H_ctrl)
+  S_mat_ctrl <- 1 - Q_star_ctrl
+  if (tau > 1L) {
+    for (tt in 2:tau) {
+      S_mat_ctrl[, tt] <- S_mat_ctrl[, tt - 1L] * S_mat_ctrl[, tt]
+    }
+  }
 
-  S_mat_ctrl <- apply(1 - Q_star_ctrl, 2, cumprod)
-  S_mat_treat <- apply(1 - Q_star_treat, 2, cumprod)
+  # Treated arm: exact analytical expectation sum_k w_k(W_i) S_i^*(t | T_A = k, W_i)
+  eps_treat_vec <- ifelse(seq_len(tau) <= grace_period, eps_treat_pre, eps_treat_post)
+  eps_treat_mat <- matrix(eps_treat_vec, nrow = n_patients, ncol = tau, byrow = TRUE)
+  S_mat_treat <- matrix(0, nrow = n_patients, ncol = tau)
+  strat <- ipcw_bart$strat
+  for (idx in seq_along(strat$k_vals)) {
+    wk <- strat$w_mat[, idx]
+    if (!any(wk > 0)) next
+    k <- as.integer(strat$k_vals[idx])
+    Q_init_k <- Q0_logit_mat
+    if (k <= 1L) {
+      Q_init_k <- Q1_logit_mat
+    } else if (k <= tau) {
+      Q_init_k[, k:tau] <- Q1_logit_mat[, k:tau, drop = FALSE]
+    }
+    Q_star_k <- stats::plogis(Q_init_k + eps_treat_mat * ipcw_bart$cf_H_treat_list[[idx]])
+    S_k <- 1 - Q_star_k
+    if (tau > 1L) {
+      for (tt in 2:tau) {
+        S_k[, tt] <- S_k[, tt - 1L] * S_k[, tt]
+      }
+    }
+    S_mat_treat <- S_mat_treat + sweep(S_k, 1L, wk, "*")
+  }
 
-  mean_s0 <- rowMeans(S_mat_ctrl)
-  mean_s1 <- rowMeans(S_mat_treat)
+  mean_s0 <- colMeans(S_mat_ctrl)
+  mean_s1 <- colMeans(S_mat_treat)
   mean_rd <- mean_s1 - mean_s0
 
   cf_ctrl_df <- cf_base %>%
-    dplyr::mutate(arm = "control_no_tx", indiv_survival = as.vector(S_mat_ctrl))
+    dplyr::mutate(arm = "control_no_tx", indiv_survival = as.vector(t(S_mat_ctrl)))
   cf_treat_df <- cf_base %>%
-    dplyr::mutate(arm = "treat_tx", indiv_survival = as.vector(S_mat_treat))
+    dplyr::mutate(arm = "treat_tx", indiv_survival = as.vector(t(S_mat_treat)))
   cf_data <- dplyr::bind_rows(cf_ctrl_df, cf_treat_df)
 
   tmle_surv <- tibble::tibble(
@@ -557,6 +654,7 @@ fit_bart_pair <- function(data,
     crit_val_simul = inf_res$crit_val_simul,
     se_rmstd = inf_res$se_rmstd,
     m_fluc = targ_res$m_fluctuate,
+    tx_strategy = ipcw_bart$tx_strategy,
     elapsed_sec = 0.5 * t_py_elapsed + as.numeric(proc.time()["elapsed"] - t0_tmle)
   )
 
@@ -573,11 +671,19 @@ fit_bart_pair <- function(data,
 #' @param covars Character vector of baseline covariate column names.
 #' @param grace_period Numeric grace period duration (default 10).
 #' @param tau Follow-up time horizon (default 30).
-#' @param ntree Number of trees in the BART ensemble (default 30).
-#' @param ndpost Number of retained posterior MCMC draws (default 100).
-#' @param nskip Number of MCMC burn-in iterations (default 100).
-#' @param thin Thinning factor (default 2).
+#' @param ntree Number of trees in the BART ensemble (default 50, matching \code{SurvBART.preset_standard()}).
+#' @param ndpost Number of retained posterior MCMC draws per chain (default 250, i.e., 1,000 total draws with thin = 4).
+#' @param nskip Number of MCMC burn-in iterations per chain (default 250).
+#' @param thin Thinning factor (default 4).
+#' @param chains Number of MCMC chains in Python \code{SurvBART} (default 4).
+#' @param cores Number of worker cores inside Python \code{SurvBART} (default 1).
 #' @param mc.cores Unused when Python \code{bart-survival} backend is active.
+#' @param p_form Optional treatment-initiation propensity formula used to compute policy weights
+#'   when \code{tx_strategy != "empirical_complier"}. Defaults to natural cubic spline in \code{t} plus \code{covars}.
+#' @param tx_strategy Treatment-arm grace-period policy: \code{"conditional_complier"} (default),
+#'   \code{"empirical_complier"}, or \code{"natural_grace"}.
+#' @param align_grace_weights Legacy alias: if \code{FALSE}, overrides \code{tx_strategy} to
+#'   \code{"natural_grace"}.
 #' @param seed Optional random seed.
 #' @export
 fit_bart_gcomp <- function(data,
@@ -585,13 +691,29 @@ fit_bart_gcomp <- function(data,
                            covars = c("w1", "w2"),
                            grace_period = 10,
                            tau = 30,
-                           ntree = 30,
-                           ndpost = 100,
-                           nskip = 100,
-                           thin = 2,
+                           ntree = 50,
+                           ndpost = 250,
+                           nskip = 250,
+                           thin = 4,
+                           chains = 4L,
+                           cores = 1L,
                            mc.cores = 1,
+                           p_form = NULL,
+                           tx_strategy = c("conditional_complier", "empirical_complier", "natural_grace"),
+                           align_grace_weights = TRUE,
                            seed = NULL) {
   if (!is.null(seed)) set.seed(seed)
+  tx_strategy <- match.arg(tx_strategy)
+  if (!align_grace_weights && tx_strategy != "natural_grace") {
+    tx_strategy <- "natural_grace"
+  }
+  t0_all <- proc.time()["elapsed"]
+
+  base_ord <- data %>%
+    dplyr::distinct(id, .keep_all = TRUE) %>%
+    dplyr::arrange(id)
+  n_patients <- nrow(base_ord)
+  n_grace_int <- max(as.integer(grace_period), 1L)
 
   panel_bart <- clones %>%
     dplyr::mutate(n_int = pmax(ceiling(time_cc), 0L)) %>%
@@ -599,37 +721,29 @@ fit_bart_gcomp <- function(data,
     dplyr::mutate(
       event_cc_day = dplyr::if_else(event_cc == 1L & time_cc > (t - 1L) & time_cc <= t, 1L, 0L),
       is_treated = dplyr::if_else(tx_ever == 1L & t >= t_switch, 1L, 0L)
-    )
+    ) %>%
+    dplyr::arrange(id, clone_arm, t)
 
   X_train <- panel_bart %>%
     dplyr::select(t, dplyr::all_of(covars), is_treated) %>%
     as.matrix()
   Y_train <- panel_bart$event_cc_day
 
-  complier_times <- clones %>%
-    dplyr::filter(arm == "treat_tx" & tx_ever == 1L & t_switch <= grace_period) %>%
-    dplyr::pull(t_switch)
-  if (length(complier_times) == 0) complier_times <- grace_period
-
-  cf_base <- data %>%
-    dplyr::select(id, dplyr::all_of(covars), tx_ever, t_switch) %>%
-    dplyr::mutate(sampled_t = sample(complier_times, dplyr::n(), replace = TRUE)) %>%
+  cf_base <- base_ord %>%
+    dplyr::select(id, dplyr::all_of(covars)) %>%
     tidyr::uncount(weights = tau, .id = "t")
 
-  cf_ctrl <- cf_base %>%
+  cf_0 <- cf_base %>%
     dplyr::mutate(is_treated = 0L) %>%
     dplyr::select(t, dplyr::all_of(covars), is_treated) %>%
     as.matrix()
 
-  cf_treat <- cf_base %>%
-    dplyr::mutate(
-      t_sw = dplyr::if_else(tx_ever == 1L & t_switch <= grace_period, t_switch, sampled_t),
-      is_treated = dplyr::if_else(t >= t_sw, 1L, 0L)
-    ) %>%
+  cf_1 <- cf_base %>%
+    dplyr::mutate(is_treated = 1L) %>%
     dplyr::select(t, dplyr::all_of(covars), is_treated) %>%
     as.matrix()
 
-  X_test <- rbind(cf_ctrl, cf_treat)
+  X_test <- rbind(cf_0, cf_1)
 
   py_out <- run_python_surv_bart(
     mode = "q_only",
@@ -641,14 +755,63 @@ fit_bart_gcomp <- function(data,
     ndpost = ndpost,
     nskip = nskip,
     thin = thin,
+    chains = chains,
+    cores = cores,
     seed = if (is.null(seed)) 99L else as.integer(seed)
   )
 
-  summarize_bart_gcomp_draws(
-    q_cf_draws = py_out$q_cf_draws,
-    n_patients = nrow(data),
-    tau = tau
+  # Policy mixture weights w_k(W_i) on sorted patients
+  obs_panel <- clones %>%
+    dplyr::filter(clone_arm == 1L) %>%
+    dplyr::mutate(
+      tmax = pmin(dplyr::if_else(tx_ever == 1L, t_switch, time), time, grace_period),
+      n_int = pmax(ceiling(tmax), 1L)
+    ) %>%
+    tidyr::uncount(weights = n_int, .id = "t") %>%
+    dplyr::mutate(
+      event_tx = dplyr::if_else(tx_ever == 1L & t == t_switch & time >= t_switch & t <= grace_period, 1L, 0L)
+    )
+
+  df_t <- min(3L, max(n_grace_int - 1L, 1L))
+  p_form_use <- if (is.null(p_form)) {
+    stats::as.formula(paste("event_tx ~ splines::ns(t, df =", df_t, ") +", paste(covars, collapse = " + ")))
+  } else {
+    p_form
+  }
+  num_form <- stats::as.formula(paste("event_tx ~ splines::ns(t, df =", df_t, ")"))
+  m_denom_ctrl <- suppressWarnings(stats::glm(p_form_use, family = stats::binomial(), data = obs_panel))
+  m_num_ctrl <- suppressWarnings(stats::glm(num_form, family = stats::binomial(), data = obs_panel))
+
+  grace_surv <- compute_grace_survival_grid(
+    data_patients = base_ord,
+    covars = covars,
+    grace_period = grace_period,
+    dt = 1,
+    m_denom_ctrl = m_denom_ctrl,
+    m_num_ctrl = m_num_ctrl,
+    use_sl = FALSE
   )
+  p_star <- compute_empirical_complier_probs(
+    clones = clones,
+    grace_period = grace_period,
+    n_grace_int = grace_surv$n_grace_int
+  )
+  strat <- compute_tx_strategy_weights(
+    grace_surv = grace_surv,
+    tx_strategy = tx_strategy,
+    p_star = p_star
+  )
+
+  res <- summarize_bart_gcomp_draws(
+    q_cf_draws = py_out$q_cf_draws,
+    n_patients = n_patients,
+    tau = tau,
+    w_mat = strat$w_mat,
+    k_vals = strat$k_vals
+  )
+  res$tx_strategy <- tx_strategy
+  res$elapsed_sec <- as.numeric(proc.time()["elapsed"] - t0_all)
+  res
 }
 
 #' Targeted Minimum Loss-Based Estimation via Survival-BART for Both g and Q (TMLE + BART)
@@ -658,12 +821,20 @@ fit_bart_gcomp <- function(data,
 #' @param covars Character vector of baseline covariate column names.
 #' @param grace_period Numeric grace period duration (default 10).
 #' @param tau Follow-up time horizon (default 30).
-#' @param ntree Number of trees in the BART ensemble (default 30).
-#' @param ndpost Number of retained posterior MCMC draws (default 100).
-#' @param nskip Number of MCMC burn-in iterations (default 100).
-#' @param thin Thinning factor (default 2).
+#' @param ntree Number of trees in the BART ensemble (default 50, matching \code{SurvBART.preset_standard()}).
+#' @param ndpost Number of retained posterior MCMC draws per chain (default 250, i.e., 1,000 total draws with thin = 4).
+#' @param nskip Number of MCMC burn-in iterations per chain (default 250).
+#' @param thin Thinning factor (default 4).
+#' @param chains Number of MCMC chains in Python \code{SurvBART} (default 4).
+#' @param cores Number of worker cores inside Python \code{SurvBART} (default 1).
 #' @param mc.cores Unused when Python \code{bart-survival} backend is active.
 #' @param n_boot Multiplier bootstrap replicates (default 5000).
+#' @param tx_strategy Treatment-arm grace-period policy: \code{"conditional_complier"} (default),
+#'   \code{"empirical_complier"}, or \code{"natural_grace"}.
+#' @param align_grace_weights Legacy alias: if \code{FALSE}, overrides \code{tx_strategy} to
+#'   \code{"natural_grace"}.
+#' @param max_weight Hard upper cap applied after quantile trimming on stabilized IPCW weights
+#'   (default 10; \code{Inf} disables hard capping).
 #' @param seed Optional random seed.
 #' @export
 fit_bart_tmle <- function(data,
@@ -671,12 +842,17 @@ fit_bart_tmle <- function(data,
                           covars = c("w1", "w2"),
                           grace_period = 10,
                           tau = 30,
-                          ntree = 30,
-                          ndpost = 100,
-                          nskip = 100,
-                          thin = 2,
+                          ntree = 50,
+                          ndpost = 250,
+                          nskip = 250,
+                          thin = 4,
+                          chains = 4L,
+                          cores = 1L,
                           mc.cores = 1,
                           n_boot = 5000,
+                          tx_strategy = c("conditional_complier", "empirical_complier", "natural_grace"),
+                          align_grace_weights = TRUE,
+                          max_weight = 10,
                           seed = NULL) {
   pair_res <- fit_bart_pair(
     data = data,
@@ -688,7 +864,12 @@ fit_bart_tmle <- function(data,
     ndpost = ndpost,
     nskip = nskip,
     thin = thin,
+    chains = chains,
+    cores = cores,
     n_boot = n_boot,
+    tx_strategy = tx_strategy,
+    align_grace_weights = align_grace_weights,
+    max_weight = max_weight,
     seed = seed
   )
   pair_res$tmle

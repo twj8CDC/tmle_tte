@@ -20,6 +20,10 @@
 #' @param n_boot Number of multiplier bootstrap iterations for simultaneous confidence bands (default 10,000).
 #' @param alpha Significance level for intervals and bands (default 0.05).
 #' @param pure_gcomp Logical. If \code{TRUE}, evaluates pure counterfactual G-computation without the TMLE targeting update.
+#' @param align_grace_weights Deprecated compatibility flag (mapped to \code{"natural_grace"} if \code{FALSE}).
+#' @param tx_strategy Treatment-arm initiation policy during the grace period:
+#'   \code{"conditional_complier"} (default), \code{"empirical_complier"}, or \code{"natural_grace"}.
+#' @param max_weight Numeric upper cap on stabilized IPCW weights (default 10).
 #' @param seed Optional random seed.
 #' @param id_col Column name for individual ID (default \code{"id"}).
 #' @param time_col Column name for follow-up time (default \code{"event_time"}).
@@ -53,12 +57,21 @@ tte_tmle <- function(data,
                      n_boot = 10000,
                      alpha = 0.05,
                      pure_gcomp = FALSE,
+                     align_grace_weights = TRUE,
+                     tx_strategy = c("conditional_complier", "empirical_complier", "natural_grace"),
+                     max_weight = 10,
                      seed = NULL,
                      id_col = "id",
                      time_col = "event_time",
                      event_col = "event",
                      tx_col = "tx_obs",
                      tx_time_col = "tx_time_obs") {
+  if (missing(tx_strategy) && !isTRUE(align_grace_weights)) {
+    tx_strategy <- "natural_grace"
+  } else {
+    tx_strategy <- match.arg(tx_strategy)
+  }
+  align_grace_weights <- (tx_strategy != "natural_grace")
   
   # Standardize column mapping
   data_clean <- prepare_tte_data(
@@ -87,7 +100,10 @@ tte_tmle <- function(data,
     p_form = p_form,
     use_sl = use_sl,
     sl_lib = sl_lib,
-    trim_quantile = trim_quantile
+    trim_quantile = trim_quantile,
+    align_grace_weights = align_grace_weights,
+    tx_strategy = tx_strategy,
+    max_weight = max_weight
   )
   
   panel_w <- ipcw_res$panel_w
@@ -144,7 +160,11 @@ tte_tmle <- function(data,
     covars = covars,
     q_lim = ipcw_res$q_lim,
     use_sl = use_sl,
-    do_targeting = !pure_gcomp
+    do_targeting = !pure_gcomp,
+    grace_surv = ipcw_res$grace_surv,
+    tx_strategy = tx_strategy,
+    p_star = ipcw_res$p_star,
+    align_grace_weights = align_grace_weights
   )
   
   # Step 6: Empirical Influence Curve & Multiplier Bootstrap Inference
@@ -190,7 +210,8 @@ tte_tmle <- function(data,
       tau = tau,
       alpha = alpha,
       use_sl = use_sl,
-      pure_gcomp = pure_gcomp
+      pure_gcomp = pure_gcomp,
+      tx_strategy = tx_strategy
     )
   )
   

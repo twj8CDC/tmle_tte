@@ -29,14 +29,14 @@ import numpy as np
 from bart_survival import SurvBART
 
 
-def fit_and_predict(x_train, y_train, x_test, trees, draws, tune, thin, seed):
+def fit_and_predict(x_train, y_train, x_test, trees, draws, tune, thin, chains, cores, seed):
     np.random.seed(int(seed))
     model = SurvBART(
         trees=int(trees),
         draws=int(draws),
         tune=int(tune),
-        chains=1,
-        cores=1,
+        chains=int(chains),
+        cores=int(cores),
         thin=int(thin),
         split_method="empirical",
     )
@@ -57,6 +57,8 @@ def main():
     draws = meta.get("draws", 200)
     tune = meta.get("tune", 100)
     thin = meta.get("thin", 2)
+    chains = meta.get("chains", 1)
+    cores = meta.get("cores", 1)
     seed = meta.get("seed", 99)
 
     out_meta = {}
@@ -84,6 +86,8 @@ def main():
             draws=draws,
             tune=tune,
             thin=thin,
+            chains=chains,
+            cores=cores,
             seed=seed,
         )
         g_mean = np.mean(g_draws, axis=0).astype(np.float64)
@@ -114,6 +118,8 @@ def main():
             draws=draws,
             tune=tune,
             thin=thin,
+            chains=chains,
+            cores=cores,
             seed=seed + 17,
         )
         out_meta["M_q"] = int(q_draws.shape[0])

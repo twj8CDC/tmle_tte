@@ -5,7 +5,7 @@
 #' - Rows 1-4: Bias, RMSE, 95% Coverage (%), 95% CI Width
 #' - Row 5 (Diagnostics): SE Ratio [RD(30)], Uniform Band Cov (%), Mean Pointwise Band Cov (%), Mean Band Width
 #' - Y-axis Grouping: Non-Parametric (Top), Parametric [Corr] (Middle, Filled), Parametric [Mis] (Bottom, Open)
-#' - Colors & Shapes: Non-Parametric (Green Triangles), TTE-TMLE GLM (Blue Triangles), CCW (Blue Circles), Cox (Red Squares)
+#' - Colors & Shapes: Non-Parametric (Green Triangles), TTE-TMLE GLM (Blue Triangles), CCW-KM (Blue Circles), Time-Matched Cox (Red Squares)
 
 library(ggplot2)
 library(dplyr)
@@ -19,9 +19,15 @@ generate_100iter_plots <- function(rds_path = "sim/simulation_results_100iter.rd
 
   df <- readRDS(rds_path)
 
-  # Filter out intermediate partial regimes (Regimes 2 & 3 of GLM) for the main comparative plots
+  # Plot only estimators that cleanly target baseline t=0 marginal survival trajectories
   df_plot <- df %>%
-    filter(spec_group %in% c("Non-Parametric", "Parametric (Correct)", "Parametric (Misspecified)"))
+    filter(
+      spec_group %in% c("Non-Parametric", "Parametric (Correct)", "Parametric (Misspecified)"),
+      estimator %in% c(
+        "TTE-TMLE (BART)", "G-COMP (BART)", "TTE-TMLE (SuperLearner)",
+        "TTE-TMLE (GLM)", "CCW-KM", "Time-Matched Cox"
+      )
+    )
 
   # Create unified Y-axis factor
   df_plot <- df_plot %>%
@@ -40,19 +46,11 @@ generate_100iter_plots <- function(rds_path = "sim/simulation_results_100iter.rd
 
   y_levels_ordered <- c(
     # Parametric (Misspecified) - Bottom
-    "Naive Cox [Mis]",
-    "Landmark Cox [Mis]",
-    "Time-Dependent Cox [Mis]",
     "Time-Matched Cox [Mis]",
-    "CCW-CPHM [Mis]",
     "CCW-KM [Mis]",
     "TTE-TMLE (GLM) [Mis]",
     # Parametric (Correct) - Middle
-    "Naive Cox [Corr]",
-    "Landmark Cox [Corr]",
-    "Time-Dependent Cox [Corr]",
     "Time-Matched Cox [Corr]",
-    "CCW-CPHM [Corr]",
     "CCW-KM [Corr]",
     "TTE-TMLE (GLM) [Corr]",
     # Non-Parametric - Top
@@ -111,25 +109,17 @@ generate_100iter_plots <- function(rds_path = "sim/simulation_results_100iter.rd
   )
 
   # Color, fill, and shape definitions per y_label
-  # Colors: Non-Parametric = Green (#2CA02C), CCW & TTE-TMLE (GLM) = Blue (#1F77B4), Cox = Red (#D62728)
+  # Colors: Non-Parametric = Green (#2CA02C), CCW-KM & TTE-TMLE (GLM) = Blue (#1F77B4), Time-Matched Cox = Red (#D62728)
   # Shapes (pch 21=circle, 22=square, 24=triangle):
   #   Triangles (24): 3 Non-Parametrics + TTE-TMLE (GLM)
-  #   Circles (21):   CCW-KM, CCW-CPHM
-  #   Squares (22):   Naive Cox, Landmark Cox, Time-Dependent Cox, Time-Matched Cox
+  #   Circles (21):   CCW-KM
+  #   Squares (22):   Time-Matched Cox
   # Fill: Filled with group color for Non-Parametric and [Corr]; "white" (open) for [Mis]
   label_colors <- c(
-    "Naive Cox [Mis]"            = "#D62728",
-    "Landmark Cox [Mis]"         = "#D62728",
-    "Time-Dependent Cox [Mis]"   = "#D62728",
     "Time-Matched Cox [Mis]"     = "#D62728",
-    "CCW-CPHM [Mis]"             = "#1F77B4",
     "CCW-KM [Mis]"               = "#1F77B4",
     "TTE-TMLE (GLM) [Mis]"       = "#1F77B4",
-    "Naive Cox [Corr]"           = "#D62728",
-    "Landmark Cox [Corr]"        = "#D62728",
-    "Time-Dependent Cox [Corr]"  = "#D62728",
     "Time-Matched Cox [Corr]"    = "#D62728",
-    "CCW-CPHM [Corr]"            = "#1F77B4",
     "CCW-KM [Corr]"              = "#1F77B4",
     "TTE-TMLE (GLM) [Corr]"      = "#1F77B4",
     "TTE-TMLE (SuperLearner)"    = "#2CA02C",
@@ -138,18 +128,10 @@ generate_100iter_plots <- function(rds_path = "sim/simulation_results_100iter.rd
   )
 
   label_fills <- c(
-    "Naive Cox [Mis]"            = "white",
-    "Landmark Cox [Mis]"         = "white",
-    "Time-Dependent Cox [Mis]"   = "white",
     "Time-Matched Cox [Mis]"     = "white",
-    "CCW-CPHM [Mis]"             = "white",
     "CCW-KM [Mis]"               = "white",
     "TTE-TMLE (GLM) [Mis]"       = "white",
-    "Naive Cox [Corr]"           = "#D62728",
-    "Landmark Cox [Corr]"        = "#D62728",
-    "Time-Dependent Cox [Corr]"  = "#D62728",
     "Time-Matched Cox [Corr]"    = "#D62728",
-    "CCW-CPHM [Corr]"            = "#1F77B4",
     "CCW-KM [Corr]"              = "#1F77B4",
     "TTE-TMLE (GLM) [Corr]"      = "#1F77B4",
     "TTE-TMLE (SuperLearner)"    = "#2CA02C",
@@ -158,18 +140,10 @@ generate_100iter_plots <- function(rds_path = "sim/simulation_results_100iter.rd
   )
 
   label_shapes <- c(
-    "Naive Cox [Mis]"            = 22,
-    "Landmark Cox [Mis]"         = 22,
-    "Time-Dependent Cox [Mis]"   = 22,
     "Time-Matched Cox [Mis]"     = 22,
-    "CCW-CPHM [Mis]"             = 21,
     "CCW-KM [Mis]"               = 21,
     "TTE-TMLE (GLM) [Mis]"       = 24,
-    "Naive Cox [Corr]"           = 22,
-    "Landmark Cox [Corr]"        = 22,
-    "Time-Dependent Cox [Corr]"  = 22,
     "Time-Matched Cox [Corr]"    = 22,
-    "CCW-CPHM [Corr]"            = 21,
     "CCW-KM [Corr]"              = 21,
     "TTE-TMLE (GLM) [Corr]"      = 24,
     "TTE-TMLE (SuperLearner)"    = 24,
@@ -179,7 +153,7 @@ generate_100iter_plots <- function(rds_path = "sim/simulation_results_100iter.rd
 
   make_cell_plot <- function(data, metric_col, title_str, ref_val = NA_real_, is_leftmost = FALSE) {
     p <- ggplot(data, aes(x = .data[[metric_col]], y = y_label, color = y_label, fill = y_label, shape = y_label)) +
-      geom_hline(yintercept = c(7.5, 14.5), linetype = "dashed", color = "#BBBBBB", linewidth = 0.5)
+      geom_hline(yintercept = c(3.5, 6.5), linetype = "dashed", color = "#BBBBBB", linewidth = 0.5)
 
     if (!is.na(ref_val)) {
       p <- p + geom_vline(xintercept = ref_val, linetype = "dotted", color = "#444444", linewidth = 0.6)
@@ -256,8 +230,8 @@ generate_100iter_plots <- function(rds_path = "sim/simulation_results_100iter.rd
       plot_layout(heights = c(1, 1, 1, 1, 1)) +
       plot_annotation(
         title = scenario_titles[s_name],
-        subtitle = "100-Iteration Monte Carlo Benchmark (N = 1,000, tau = 30d, Grace = 10d) | 4x4 Estimand Grid (Rows 1-4) + 1x4 Diagnostics (Row 5)\nColors: Non-Parametric (Green), TTE-TMLE (GLM) & CCW (Blue), Cox (Red) | Shapes: TMLE/Non-Param (Triangle), CCW (Circle), Cox (Square) | Fill: [Corr] Filled, [Mis] Open",
-        caption = "Notes: Landmark Cox RMSTD is NA by construction (follow-up restricted to Days 11-30). Naive/Landmark/TD-Cox/Matched/CPHM do not construct simultaneous confidence bands (NA).",
+        subtitle = "100-Iteration Monte Carlo Benchmark (N = 1,000, tau = 30d, Grace = 10d) | 4x4 Estimand Grid (Rows 1-4) + 1x4 Diagnostics (Row 5)\nColors: Non-Parametric (Green), TTE-TMLE (GLM) & CCW-KM (Blue), Time-Matched Cox (Red) | Shapes: TMLE/Non-Param (Triangle), CCW-KM (Circle), Matched Cox (Square) | Fill: [Corr] Filled, [Mis] Open",
+        caption = "Notes: Time-Matched Cox uses untreated-hazard standardization, empirical switch integration, and patient-level bootstrap (200 resamples); Cox models do not construct simultaneous bands (NA).\nLandmark Cox and Time-Dependent Cox estimate conditional HRs only (see visual report Section 5) and are omitted from baseline t=0 marginal survival plots.",
         theme = theme(
           plot.title = element_text(size = 13, face = "bold", color = "#0F2C59"),
           plot.subtitle = element_text(size = 9.5, face = "italic", color = "#444444"),

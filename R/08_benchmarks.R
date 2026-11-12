@@ -9,8 +9,10 @@ NULL
 
 #' Naive Cox Proportional Hazards Model
 #'
-#' @description Fits a standard unadjusted or adjusted Cox model that classifies any individual
-#'   ever receiving treatment as treated from time zero, illustrating raw Immortal Time Bias (ITB).
+#' @description Fits a naive baseline Cox model that classifies any individual ever
+#'   receiving treatment as treated from time zero, illustrating raw Immortal Time Bias (ITB).
+#'   Provides only the naive conditional Cox hazard ratio; does not define valid baseline
+#'   marginal survival differences or RMSTD.
 #'
 #' @param data Observational data frame.
 #' @param covars Character vector of baseline covariates.
@@ -33,9 +35,11 @@ fit_naive_cox <- function(data, covars = NULL, q_form = NULL) {
 
 #' Landmarking Cox Model
 #'
-#' @description Implements the classic landmarking heuristic. Subsets the population to
-#'   individuals alive at the landmark time (e.g. grace period), classifies treatment status
-#'   at that landmark, and fits a Cox model on subsequent survival.
+#' @description Implements classic landmarking by subsetting to individuals alive at
+#'   \code{landmark_time} (e.g. end of the grace period) and modeling subsequent survival.
+#'   Because individuals with events on or before \code{landmark_time} are excluded,
+#'   this estimates a post-landmark conditional hazard ratio rather than baseline
+#'   marginal survival differences or 30-day RMSTD from time zero.
 #'
 #' @param data Observational data frame.
 #' @param landmark_time Time of landmark assessment (e.g. grace period threshold, default 10).
@@ -70,46 +74,47 @@ fit_landmark_cox <- function(data, landmark_time = 10, covars = NULL, tau = 30, 
 #' Time-Dependent Cox Proportional Hazards Model (td-Cox)
 #'
 #' @description Fits an extended Cox model using counting process format (tstart, tstop, event)
-#'   with a time-varying treatment covariate switching at the actual observed treatment time.
+#'   with a time-varying treatment covariate switching at the observed treatment time.
+#'   Returns the conditional instantaneous hazard ratio and Wald CI; static grace-period
+#'   survival differences and RMSTD are returned as \code{NA_real_} because counting-process
+#'   Cox regression does not natively identify a time-zero sustained treatment strategy.
 #'
 #' @param data Observational data frame.
 #' @param covars Character vector of baseline covariates.
 #' @param tau Maximum follow-up time (default 30).
-#' @param grace_period Grace period cutoff for strategy projection (default 10).
+#' @param grace_period Unused for point estimation (kept for signature compatibility).
 #' @param q_form Optional formula string for covariate adjustment.
-#' @return A list containing the fitted \code{coxph} object and counterfactual survival projections.
+#' @return A list containing the fitted \code{coxph} object, conditional HR/CI, and \code{NA_real_}
+#'   placeholders for non-identifiable baseline marginal survival metrics.
 #' @export
-#' @importFrom dplyr mutate filter bind_rows arrange
-#' @importFrom survival coxph Surv survfit
+#' @importFrom dplyr bind_rows
+#' @importFrom survival coxph Surv
 #' @importFrom stats as.formula coef vcov
 fit_td_cox <- function(data, covars = NULL, tau = 30, grace_period = 10, q_form = NULL) {
   df <- prepare_tte_data(data)
   intervals <- list()
-  
+
   for (i in seq_len(nrow(df))) {
     row <- df[i, ]
     t_end <- min(row$time, tau)
     evt <- if (row$time <= tau) row$event else 0L
-    
+
     if (row$tx_ever == 1L && row$t_switch < t_end) {
-      # Pre-switch row
       r1 <- row
       r1$tstart <- 0
       r1$tstop <- row$t_switch
       r1$event_int <- 0L
       r1$tx_td <- 0L
-      
-      # Post-switch row
+
       r2 <- row
       r2$tstart <- row$t_switch
       r2$tstop <- t_end
       r2$event_int <- evt
       r2$tx_td <- 1L
-      
+
       intervals[[length(intervals) + 1]] <- r1
       intervals[[length(intervals) + 1]] <- r2
     } else {
-      # Single interval
       r <- row
       r$tstart <- 0
       r$tstop <- t_end
@@ -118,7 +123,7 @@ fit_td_cox <- function(data, covars = NULL, tau = 30, grace_period = 10, q_form 
       intervals[[length(intervals) + 1]] <- r
     }
   }
-  
+
   td_data <- dplyr::bind_rows(intervals)
   covar_str <- if (!is.null(q_form) && nzchar(q_form)) {
     paste("+", q_form)
@@ -129,55 +134,227 @@ fit_td_cox <- function(data, covars = NULL, tau = 30, grace_period = 10, q_form 
   }
   fmla <- stats::as.formula(paste("survival::Surv(tstart, tstop, event_int) ~ tx_td", covar_str))
   model <- survival::coxph(fmla, data = td_data)
-  
-  # Extract HR and SE
-  beta_tx <- stats::coef(model)["tx_td"]
+
+  beta_tx <- unname(stats::coef(model)["tx_td"])
   se_beta <- sqrt(stats::vcov(model)["tx_td", "tx_td"])
-  hr <- exp(beta_tx)
-  hr_ci <- exp(c(beta_tx - 1.96 * se_beta, beta_tx + 1.96 * se_beta))
-  
-  # Project Strategy 0 vs Strategy 1 survival curves
-  sf_base <- survival::survfit(model)
-  times <- sf_base$time
-  cumhaz <- sf_base$cumhaz
-  
-  # Interpolate cumulative hazard across 1:tau
-  ch0 <- stats::approx(x = c(0, times), y = c(0, cumhaz), xout = seq_len(tau), method = "constant", rule = 2)$y
-  t_switch_rep <- round(grace_period / 2) # median initiation during grace
-  ch_switch <- stats::approx(x = c(0, times), y = c(0, cumhaz), xout = t_switch_rep, method = "constant", rule = 2)$y
-  
-  ch1 <- ifelse(
-    seq_len(tau) <= t_switch_rep,
-    ch0,
-    ch_switch + (ch0 - ch_switch) * hr
-  )
-  
-  s0_proj <- exp(-ch0)
-  s1_proj <- exp(-ch1)
-  rd_proj <- s1_proj - s0_proj
-  t_mid <- min(15L, tau)
-  rmstd_val <- sum(rd_proj)
-  
-  # Delta-method derivatives dS1(t)/dbeta
-  dS1_dbeta_vec <- ifelse(seq_len(tau) <= t_switch_rep, 0, -(ch0 - ch_switch) * hr * s1_proj)
-  se_rd_15 <- sqrt((dS1_dbeta_vec[t_mid] * se_beta)^2 + (rd_proj[t_mid] / sqrt(nrow(df)))^2 * 0.25)
-  se_rd_tau <- sqrt((dS1_dbeta_vec[tau] * se_beta)^2 + (rd_proj[tau] / sqrt(nrow(df)))^2 * 0.25)
-  se_rmstd <- sqrt((sum(dS1_dbeta_vec) * se_beta)^2 + (rmstd_val / sqrt(nrow(df)))^2 * 0.25)
-  
-  return(list(
+  hr_cond <- exp(beta_tx)
+  hr_cond_ci <- exp(c(beta_tx - 1.96 * se_beta, beta_tx + 1.96 * se_beta))
+
+  list(
     model = model,
-    hr = hr,
-    hr_ci = hr_ci,
+    hr = hr_cond,
+    hr_ci = hr_cond_ci,
+    hr_cond = hr_cond,
+    hr_cond_ci = hr_cond_ci,
+    rd_15 = NA_real_,
+    se_rd_15 = NA_real_,
+    rd_tau = NA_real_,
+    se_rd_tau = NA_real_,
+    rmstd = NA_real_,
+    se_rmstd = NA_real_,
+    S0 = rep(NA_real_, tau),
+    S1 = rep(NA_real_, tau),
+    rd = rep(NA_real_, tau)
+  )
+}
+
+# Internal single-pass fitter for Risk-Set Time-Matched Cox + G-standardized marginal curves
+.fit_time_matched_point <- function(df,
+                                    p_form,
+                                    q_form,
+                                    tau = 30,
+                                    grace_period = 10,
+                                    robust_vcov = TRUE) {
+  n <- nrow(df)
+  df$took_tx_grace <- as.integer(
+    df$tx_ever == 1L & !is.na(df$t_switch) & df$t_switch <= grace_period & df$time >= df$t_switch
+  )
+
+  ps_fmla <- stats::as.formula(paste("took_tx_grace ~", p_form))
+  ps_mod <- suppressWarnings(stats::glm(ps_fmla, family = stats::binomial(), data = df))
+  ps_lp <- as.numeric(stats::predict(ps_mod, type = "link"))
+
+  init_pos <- which(df$took_tx_grace == 1L)
+  if (length(init_pos) == 0L) return(NULL)
+  init_pos <- init_pos[order(df$t_switch[init_pos], df$id[init_pos])]
+  n_init <- length(init_pos)
+
+  avail <- rep(TRUE, n)
+  src_idx <- integer(2L * n_init)
+  pair_id_vec <- integer(2L * n_init)
+  tx_match_vec <- integer(2L * n_init)
+  tstart_vec <- numeric(2L * n_init)
+  tstop_vec <- numeric(2L * n_init)
+  event_int_vec <- integer(2L * n_init)
+  k <- 0L
+
+  time_v <- df$time
+  event_v <- df$event
+  tx_ever_v <- df$tx_ever
+  tsw_v <- df$t_switch
+
+  elig_by_day <- lapply(seq_len(grace_period), function(d) {
+    time_v >= d & (tx_ever_v == 0L | is.na(tsw_v) | tsw_v > d)
+  })
+
+  for (i in seq_len(n_init)) {
+    tr_pos <- init_pos[i]
+    d_i <- max(1L, min(as.integer(grace_period), as.integer(tsw_v[tr_pos])))
+    tstart_i <- max(0, d_i - 1)
+
+    elig_day <- elig_by_day[[d_i]]
+    elig_day[tr_pos] <- FALSE
+
+    elig_idx <- which(avail & elig_day)
+    if (length(elig_idx) == 0L) {
+      elig_idx <- which(elig_day)
+    }
+    if (length(elig_idx) == 0L) next
+
+    dists <- abs(ps_lp[elig_idx] - ps_lp[tr_pos])
+    min_d <- min(dists)
+    tied <- elig_idx[abs(dists - min_d) <= 1e-8]
+    best_j <- if (length(tied) > 1L) tied[sample.int(length(tied), 1L)] else tied[1L]
+    avail[best_j] <- FALSE
+
+    # Treated record over (d_i - 1, min(time, tau)]
+    k <- k + 1L
+    src_idx[k] <- tr_pos
+    pair_id_vec[k] <- i
+    tx_match_vec[k] <- 1L
+    tstart_vec[k] <- tstart_i
+    tstop_vec[k] <- max(min(time_v[tr_pos], tau), tstart_i + 1e-4)
+    event_int_vec[k] <- as.integer(time_v[tr_pos] <= tau && event_v[tr_pos] == 1L)
+
+    # Control record over (d_i - 1, ...], censored at (t_switch - 1) if later initiates tx within grace_period
+    k <- k + 1L
+    src_idx[k] <- best_j
+    pair_id_vec[k] <- i
+    tx_match_vec[k] <- 0L
+    tstart_vec[k] <- tstart_i
+    if (tx_ever_v[best_j] == 1L && !is.na(tsw_v[best_j]) && tsw_v[best_j] <= grace_period && tsw_v[best_j] > d_i) {
+      censor_t <- tsw_v[best_j] - 1
+      tstop_vec[k] <- max(min(time_v[best_j], censor_t, tau), tstart_i + 1e-4)
+      event_int_vec[k] <- as.integer(time_v[best_j] <= censor_t && time_v[best_j] <= tau && event_v[best_j] == 1L)
+    } else {
+      tstop_vec[k] <- max(min(time_v[best_j], tau), tstart_i + 1e-4)
+      event_int_vec[k] <- as.integer(time_v[best_j] <= tau && event_v[best_j] == 1L)
+    }
+  }
+
+  if (k < 2L) return(NULL)
+  seq_k <- seq_len(k)
+  m_df <- df[src_idx[seq_k], , drop = FALSE]
+  m_df$pair_id <- pair_id_vec[seq_k]
+  m_df$tx_match <- tx_match_vec[seq_k]
+  m_df$tstart <- tstart_vec[seq_k]
+  m_df$tstop <- tstop_vec[seq_k]
+  m_df$event_int <- event_int_vec[seq_k]
+
+  if (length(unique(m_df$tx_match)) < 2L || sum(m_df$event_int) == 0L) return(NULL)
+
+  covar_str <- if (nzchar(q_form)) paste("+", q_form) else ""
+  fmla <- stats::as.formula(paste("survival::Surv(tstart, tstop, event_int) ~ tx_match", covar_str))
+  model <- if (robust_vcov) {
+    suppressWarnings(survival::coxph(fmla, data = m_df, cluster = m_df$id))
+  } else {
+    suppressWarnings(survival::coxph(fmla, data = m_df))
+  }
+
+  coefs <- stats::coef(model)
+  beta_tx <- unname(coefs["tx_match"])
+  if (is.na(beta_tx) || !is.finite(beta_tx)) return(NULL)
+  hr_cond <- exp(beta_tx)
+
+  # Untreated counting-process risk set for full-cohort baseline cumulative hazard H0(t)
+  untreat_df <- df
+  untreat_df$tstart <- 0
+  sw_flag <- tx_ever_v == 1L & !is.na(tsw_v) & tsw_v <= grace_period
+  untreat_df$tstop <- ifelse(sw_flag, pmax(pmin(time_v, tsw_v - 1, tau), 1e-4), pmax(pmin(time_v, tau), 1e-4))
+  untreat_df$event_int <- ifelse(
+    sw_flag,
+    as.integer(time_v < tsw_v & time_v <= tau & event_v == 1L),
+    as.integer(time_v <= tau & event_v == 1L)
+  )
+  fmla_base <- if (nzchar(q_form)) {
+    stats::as.formula(paste("survival::Surv(tstart, tstop, event_int) ~", q_form))
+  } else {
+    stats::as.formula("survival::Surv(tstart, tstop, event_int) ~ 1")
+  }
+  mod_base <- suppressWarnings(survival::coxph(fmla_base, data = untreat_df))
+  coefs_base <- stats::coef(mod_base)
+  bh <- survival::basehaz(mod_base, centered = FALSE)
+  H0_t <- stats::approx(c(0, bh$time), c(0, bh$hazard), xout = seq_len(tau), method = "constant", rule = 2)$y
+
+  if (nzchar(q_form) && !is.null(coefs_base) && length(coefs_base) > 0) {
+    coefs_base[is.na(coefs_base)] <- 0
+    mm <- stats::model.matrix(stats::as.formula(paste("~", q_form)), data = df)
+    cov_present <- intersect(colnames(mm), names(coefs_base))
+    lp_w <- if (length(cov_present) > 0) {
+      as.numeric(mm[, cov_present, drop = FALSE] %*% coefs_base[cov_present])
+    } else {
+      rep(0, n)
+    }
+  } else {
+    lp_w <- rep(0, n)
+  }
+  mult0 <- exp(lp_w)
+
+  # Analytical integration across empirical grace-period switch-day distribution
+  comp_days <- tsw_v[init_pos]
+  tab_d <- table(comp_days)
+  d_vals <- as.integer(names(tab_d))
+  p_vals <- as.numeric(tab_d) / sum(tab_d)
+  H0_d <- stats::approx(c(0, bh$time), c(0, bh$hazard), xout = pmax(0, d_vals - 1), method = "constant", rule = 2)$y
+
+  t_seq <- seq_len(tau)
+  s0_proj <- colMeans(exp(-outer(mult0, H0_t, "*")), na.rm = TRUE)
+
+  init_mask <- df$took_tx_grace == 1L
+  has_noninit <- any(!init_mask)
+  s1_mat <- matrix(0, nrow = n, ncol = tau)
+
+  for (j in seq_along(d_vals)) {
+    d <- d_vals[j]
+    H_d <- H0_d[j]
+    h_vec_d <- ifelse(t_seq < d, H0_t, H_d + (H0_t - H_d) * hr_cond)
+    s_d <- exp(-outer(mult0, h_vec_d, "*"))
+
+    match_j <- init_mask & (tsw_v == d)
+    if (any(match_j)) {
+      s1_mat[match_j, ] <- s_d[match_j, , drop = FALSE]
+    }
+    if (has_noninit) {
+      s1_mat[!init_mask, ] <- s1_mat[!init_mask, , drop = FALSE] + p_vals[j] * s_d[!init_mask, , drop = FALSE]
+    }
+  }
+
+  s1_proj <- colMeans(s1_mat, na.rm = TRUE)
+  rd_proj <- s1_proj - s0_proj
+
+  s0_tau_c <- min(max(s0_proj[tau], 1e-6), 1 - 1e-6)
+  s1_tau_c <- min(max(s1_proj[tau], 1e-6), 1 - 1e-6)
+  hr_marg <- log(s1_tau_c) / log(s0_tau_c)
+  t_mid <- min(15L, tau)
+
+  out <- list(
     rd_15 = rd_proj[t_mid],
-    se_rd_15 = se_rd_15,
     rd_tau = rd_proj[tau],
-    se_rd_tau = se_rd_tau,
-    rmstd = rmstd_val,
-    se_rmstd = se_rmstd,
+    rmstd = sum(rd_proj),
+    hr_marg = hr_marg,
+    hr_cond = hr_cond,
+    s0_tau = s0_proj[tau],
+    s1_tau = s1_proj[tau],
     S0 = s0_proj,
     S1 = s1_proj,
     rd = rd_proj
-  ))
+  )
+  if (robust_vcov) {
+    se_beta <- sqrt(stats::vcov(model)["tx_match", "tx_match"])
+    out$model <- model
+    out$hr_cond_ci <- exp(c(beta_tx - 1.96 * se_beta, beta_tx + 1.96 * se_beta))
+  }
+  out
 }
 
 #' Risk-Set Time-Matched Cox Model (Exposure-Density Sampling / Prescription Time-Distribution Matching)
@@ -188,24 +365,31 @@ fit_td_cox <- function(data, covars = NULL, tau = 30, grace_period = 10, q_form 
 #'   at the start of day \code{d_i}. Both members of the matched pair enter follow-up at index time
 #'   \code{tstart = d_i - 1}, eliminating immortal time bias without cloning. Controls who subsequently
 #'   initiate treatment during the grace period are censored at their treatment initiation time.
+#'   Counterfactual marginal survival curves (\code{S0}, \code{S1}), \code{RD(t)}, \code{RMSTD},
+#'   and cumulative \code{Marginal HR(tau)} are obtained via baseline untreated-hazard standardization
+#'   integrated deterministically over the empirical initiation-time distribution, with patient-level
+#'   nonparametric bootstrap standard errors.
 #'
 #' @param data Observational data frame.
 #' @param covars Character vector of baseline covariates.
 #' @param p_form Optional formula string for baseline propensity score matching.
+#' @param q_form Optional formula string for outcome Cox regression adjustment.
 #' @param tau Maximum follow-up time (default 30).
 #' @param grace_period Grace period cutoff (default 10).
-#' @param seed Optional random seed for reproducible empirical switch-time projection.
-#' @return A list containing the fitted \code{coxph} model, HR, CI, and marginalized counterfactual survival curves.
+#' @param n_boot Number of patient-level nonparametric bootstrap replicates for inference (default 200).
+#' @param seed Optional random seed for reproducible tie-breaking and bootstrap inference.
+#' @return A list containing the fitted \code{coxph} model, marginal and conditional HRs, CIs,
+#'   G-standardized counterfactual survival curves, and bootstrap standard errors.
 #' @export
-#' @importFrom dplyr bind_rows
 #' @importFrom survival coxph Surv basehaz
-#' @importFrom stats as.formula glm binomial predict coef vcov approx
+#' @importFrom stats as.formula glm binomial predict coef vcov approx sd
 fit_time_matched_cox <- function(data,
                                  covars = NULL,
                                  p_form = NULL,
                                  q_form = NULL,
                                  tau = 30,
                                  grace_period = 10,
+                                 n_boot = 200L,
                                  seed = NULL) {
   if (!is.null(seed)) set.seed(seed)
   df <- prepare_tte_data(data)
@@ -215,165 +399,81 @@ fit_time_matched_cox <- function(data,
   if (is.null(q_form)) {
     q_form <- if (!is.null(covars) && length(covars) > 0) paste(covars, collapse = " + ") else ""
   }
-  
-  df$took_tx_grace <- as.integer(
-    df$tx_ever == 1L & !is.na(df$t_switch) & df$t_switch <= grace_period & df$time >= df$t_switch
+
+  pt <- .fit_time_matched_point(
+    df = df,
+    p_form = p_form,
+    q_form = q_form,
+    tau = tau,
+    grace_period = grace_period,
+    robust_vcov = TRUE
   )
-  ps_fmla <- stats::as.formula(paste("took_tx_grace ~", p_form))
-  ps_mod <- suppressWarnings(stats::glm(ps_fmla, family = stats::binomial(), data = df))
-  df$ps_lp <- as.numeric(stats::predict(ps_mod, type = "link"))
-  
-  initiators <- df[df$took_tx_grace == 1L, , drop = FALSE]
-  initiators <- initiators[order(initiators$t_switch, initiators$id), , drop = FALSE]
-  
-  matched_rows <- vector("list", nrow(initiators) * 2L)
-  k <- 0L
-  used_control_ids <- integer(0)
-  
-  for (i in seq_len(nrow(initiators))) {
-    tr_row <- initiators[i, , drop = FALSE]
-    d_i <- tr_row$t_switch
-    tstart_i <- max(0, d_i - 1)
-    
-    # Risk set at start of day d_i: alive at day d_i (time >= d_i) and not yet treated at day d_i
-    elig_idx <- which(
-      df$id != tr_row$id &
-        !(df$id %in% used_control_ids) &
-        df$time >= d_i &
-        (df$tx_ever == 0L | is.na(df$t_switch) | df$t_switch > d_i)
-    )
-    if (length(elig_idx) == 0L) {
-      elig_idx <- which(
-        df$id != tr_row$id &
-          df$time >= d_i &
-          (df$tx_ever == 0L | is.na(df$t_switch) | df$t_switch > d_i)
+  if (is.null(pt)) {
+    stop("fit_time_matched_cox failed to construct matched risk sets.")
+  }
+
+  n <- nrow(df)
+  n_boot <- as.integer(n_boot)
+  if (n_boot > 0L) {
+    boot_mat <- matrix(NA_real_, nrow = n_boot, ncol = 4L)
+    for (b in seq_len(n_boot)) {
+      b_idx <- sample.int(n, size = n, replace = TRUE)
+      b_df <- df[b_idx, , drop = FALSE]
+      b_df$id <- seq_len(n)
+      res_b <- tryCatch(
+        .fit_time_matched_point(
+          df = b_df,
+          p_form = p_form,
+          q_form = q_form,
+          tau = tau,
+          grace_period = grace_period,
+          robust_vcov = FALSE
+        ),
+        error = function(e) NULL
       )
+      if (!is.null(res_b) && is.finite(res_b$hr_marg) && res_b$hr_marg > 0) {
+        boot_mat[b, ] <- c(res_b$rd_15, res_b$rd_tau, res_b$rmstd, log(res_b$hr_marg))
+      }
     }
-    if (length(elig_idx) == 0L) next
-    
-    dists <- abs(df$ps_lp[elig_idx] - tr_row$ps_lp)
-    min_d <- min(dists)
-    tied <- elig_idx[which(abs(dists - min_d) <= 1e-8)]
-    best_j <- if (length(tied) > 1L) sample(tied, 1L) else tied[1L]
-    ct_row <- df[best_j, , drop = FALSE]
-    used_control_ids <- c(used_control_ids, ct_row$id)
-    
-    # Treated record over (d_i - 1, min(time, tau)]
-    tr_rec <- tr_row
-    tr_rec$pair_id <- i
-    tr_rec$tx_match <- 1L
-    tr_rec$tstart <- tstart_i
-    tr_rec$tstop <- pmax(pmin(tr_row$time, tau), tstart_i + 1e-4)
-    tr_rec$event_int <- as.integer(tr_row$time <= tau & tr_row$event == 1L)
-    
-    # Control record over (d_i - 1, ...], censored at (t_switch - 1) if later initiates tx within grace_period
-    ct_rec <- ct_row
-    ct_rec$pair_id <- i
-    ct_rec$tx_match <- 0L
-    ct_rec$tstart <- tstart_i
-    if (ct_row$tx_ever == 1L && !is.na(ct_row$t_switch) && ct_row$t_switch <= grace_period && ct_row$t_switch > d_i) {
-      censor_t <- ct_row$t_switch - 1
-      ct_rec$tstop <- pmax(pmin(ct_row$time, censor_t, tau), tstart_i + 1e-4)
-      ct_rec$event_int <- as.integer(ct_row$time <= censor_t & ct_row$time <= tau & ct_row$event == 1L)
+    valid_n <- sum(stats::complete.cases(boot_mat))
+    se_rd_15 <- if (valid_n >= 2L) stats::sd(boot_mat[, 1L], na.rm = TRUE) else NA_real_
+    se_rd_tau <- if (valid_n >= 2L) stats::sd(boot_mat[, 2L], na.rm = TRUE) else NA_real_
+    se_rmstd <- if (valid_n >= 2L) stats::sd(boot_mat[, 3L], na.rm = TRUE) else NA_real_
+    se_log_hr <- if (valid_n >= 2L) stats::sd(boot_mat[, 4L], na.rm = TRUE) else NA_real_
+    hr_ci <- if (is.finite(se_log_hr) && is.finite(pt$hr_marg) && pt$hr_marg > 0) {
+      exp(log(pt$hr_marg) + c(-1.96, 1.96) * se_log_hr)
     } else {
-      ct_rec$tstop <- pmax(pmin(ct_row$time, tau), tstart_i + 1e-4)
-      ct_rec$event_int <- as.integer(ct_row$time <= tau & ct_row$event == 1L)
-    }
-    
-    k <- k + 1L; matched_rows[[k]] <- tr_rec
-    k <- k + 1L; matched_rows[[k]] <- ct_rec
-  }
-  
-  m_df <- dplyr::bind_rows(matched_rows[seq_len(k)])
-  covar_str <- if (nzchar(q_form)) paste("+", q_form) else ""
-  fmla <- stats::as.formula(paste("survival::Surv(tstart, tstop, event_int) ~ tx_match", covar_str))
-  model <- survival::coxph(fmla, data = m_df, cluster = m_df$id)
-  
-  coefs <- stats::coef(model)
-  beta_tx <- unname(coefs["tx_match"])
-  se_beta <- sqrt(stats::vcov(model)["tx_match", "tx_match"])
-  hr <- exp(beta_tx)
-  hr_ci <- exp(c(beta_tx - 1.96 * se_beta, beta_tx + 1.96 * se_beta))
-  
-  # Untreated counting-process risk set for full-cohort baseline cumulative hazard H0(t)
-  untreat_df <- df
-  untreat_df$tstart <- 0
-  untreat_df$tstop <- ifelse(
-    df$tx_ever == 1L & !is.na(df$t_switch) & df$t_switch <= grace_period,
-    pmax(pmin(df$time, df$t_switch - 1, tau), 1e-4),
-    pmax(pmin(df$time, tau), 1e-4)
-  )
-  untreat_df$event_int <- ifelse(
-    df$tx_ever == 1L & !is.na(df$t_switch) & df$t_switch <= grace_period,
-    as.integer(df$time < df$t_switch & df$time <= tau & df$event == 1L),
-    as.integer(df$time <= tau & df$event == 1L)
-  )
-  fmla_base <- if (nzchar(q_form)) {
-    stats::as.formula(paste("survival::Surv(tstart, tstop, event_int) ~", q_form))
-  } else {
-    stats::as.formula("survival::Surv(tstart, tstop, event_int) ~ 1")
-  }
-  mod_base <- survival::coxph(fmla_base, data = untreat_df)
-  coefs_base <- stats::coef(mod_base)
-  bh <- survival::basehaz(mod_base, centered = FALSE)
-  H0_t <- stats::approx(c(0, bh$time), c(0, bh$hazard), xout = seq_len(tau), method = "constant", rule = 2)$y
-  
-  if (nzchar(q_form) && !is.null(coefs_base) && length(coefs_base) > 0) {
-    mm <- stats::model.matrix(stats::as.formula(paste("~", q_form)), data = df)
-    cov_present <- intersect(colnames(mm), names(coefs_base))
-    lp_w <- if (length(cov_present) > 0) {
-      as.numeric(mm[, cov_present, drop = FALSE] %*% coefs_base[cov_present])
-    } else {
-      rep(0, nrow(df))
+      c(NA_real_, NA_real_)
     }
   } else {
-    lp_w <- rep(0, nrow(df))
+    valid_n <- 0L
+    se_rd_15 <- NA_real_
+    se_rd_tau <- NA_real_
+    se_rmstd <- NA_real_
+    se_log_hr <- NA_real_
+    hr_ci <- c(NA_real_, NA_real_)
   }
-  mult0 <- exp(lp_w)
-  
-  comp_times <- initiators$t_switch
-  if (length(comp_times) == 0L) comp_times <- rep(grace_period / 2, nrow(df))
-  t_sw_imp <- ifelse(
-    df$took_tx_grace == 1L,
-    df$t_switch,
-    sample(comp_times, size = nrow(df), replace = TRUE)
-  )
-  H0_sw <- stats::approx(c(0, bh$time), c(0, bh$hazard), xout = pmax(0, t_sw_imp - 1), method = "constant", rule = 2)$y
-  
-  s0_proj <- numeric(tau)
-  s1_proj <- numeric(tau)
-  dS1_dbeta_vec <- numeric(tau)
-  for (t in seq_len(tau)) {
-    s0_proj[t] <- mean(exp(-H0_t[t] * mult0), na.rm = TRUE)
-    H1_it <- ifelse(t < t_sw_imp, H0_t[t], H0_sw + (H0_t[t] - H0_sw) * hr) * mult0
-    s1_proj[t] <- mean(exp(-H1_it), na.rm = TRUE)
-    dH1_t <- ifelse(t < t_sw_imp, 0, pmax(0, H0_t[t] - H0_sw) * hr * mult0)
-    dS1_dbeta_vec[t] <- mean(-dH1_t * exp(-H1_it), na.rm = TRUE)
-  }
-  rd_proj <- s1_proj - s0_proj
-  t_mid <- min(15L, tau)
-  rmstd_val <- sum(rd_proj)
-  
-  se_rd_15 <- sqrt((dS1_dbeta_vec[t_mid] * se_beta)^2 + (rd_proj[t_mid] / sqrt(nrow(df)))^2 * 0.25)
-  se_rd_tau <- sqrt((dS1_dbeta_vec[tau] * se_beta)^2 + (rd_proj[tau] / sqrt(nrow(df)))^2 * 0.25)
-  se_rmstd <- sqrt((sum(dS1_dbeta_vec) * se_beta)^2 + (rmstd_val / sqrt(nrow(df)))^2 * 0.25)
-  
-  return(list(
-    model = model,
-    hr = hr,
+
+  list(
+    model = pt$model,
+    hr = pt$hr_marg,
     hr_ci = hr_ci,
-    s0_tau = s0_proj[tau],
-    s1_tau = s1_proj[tau],
-    rd_15 = rd_proj[t_mid],
+    se_log_hr = se_log_hr,
+    hr_cond = pt$hr_cond,
+    hr_cond_ci = pt$hr_cond_ci,
+    s0_tau = pt$s0_tau,
+    s1_tau = pt$s1_tau,
+    rd_15 = pt$rd_15,
     se_rd_15 = se_rd_15,
-    rd_tau = rd_proj[tau],
+    rd_tau = pt$rd_tau,
     se_rd_tau = se_rd_tau,
-    rmstd = rmstd_val,
+    rmstd = pt$rmstd,
     se_rmstd = se_rmstd,
-    S0 = s0_proj,
-    S1 = s1_proj,
-    rd = rd_proj
-  ))
+    S0 = pt$S0,
+    S1 = pt$S1,
+    rd = pt$rd,
+    n_boot_valid = valid_n
+  )
 }
 
 #' Clone-Censor-Weighting Cox Proportional Hazards Model (CCW-CPHM)
@@ -400,12 +500,21 @@ fit_ccw_cphm <- function(panel_w, covars = NULL, tau = 30, q_form = NULL) {
   # after the grace period in the pooled Breslow baseline hazard denominator
   w_col <- if ("w_unstab_trim" %in% names(panel_w)) "w_unstab_trim" else "w_trim"
   panel_w$w_cphm <- panel_w[[w_col]]
-  
+
+  # Baseline cohort (one row per unique patient at t = 1) extracted before zero-weight filtering
+  base_cohort <- panel_w[panel_w$t == 1L & panel_w$arm == "control_no_tx", , drop = FALSE]
+  if (nrow(base_cohort) == 0L) {
+    base_cohort <- panel_w[!duplicated(panel_w$id), , drop = FALSE]
+  }
+
+  # coxph requires strictly positive weights; drop structural zero-weight rows (e.g. end-of-grace non-compliers)
+  panel_fit <- panel_w[panel_w$w_cphm > 0, , drop = FALSE]
+
   model <- survival::coxph(
     fmla,
-    data = panel_w,
-    weights = panel_w$w_cphm,
-    cluster = panel_w$id
+    data = panel_fit,
+    weights = panel_fit$w_cphm,
+    cluster = panel_fit$id
   )
   
   # Extract Hazard Ratio
@@ -415,12 +524,6 @@ fit_ccw_cphm <- function(panel_w, covars = NULL, tau = 30, q_form = NULL) {
   se_beta <- sqrt(stats::vcov(model)[coef_name, coef_name])
   hr <- exp(beta_arm)
   hr_ci <- exp(c(beta_arm - 1.96 * se_beta, beta_arm + 1.96 * se_beta))
-  
-  # Baseline cohort (one row per unique patient at t = 1) for exact marginalization over W_i
-  base_cohort <- panel_w[panel_w$t == 1L & panel_w$arm == "control_no_tx", , drop = FALSE]
-  if (nrow(base_cohort) == 0L) {
-    base_cohort <- panel_w[!duplicated(panel_w$id), , drop = FALSE]
-  }
   
   bh <- survival::basehaz(model, centered = FALSE)
   H0_t <- stats::approx(c(0, bh$time), c(0, bh$hazard), xout = seq_len(tau), method = "constant", rule = 2)$y

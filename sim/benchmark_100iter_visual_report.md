@@ -3,10 +3,10 @@
 **Study Configuration:**
 * **Monte Carlo Replicates:** $B = 100$ independent datasets per scenario ($8 \times 100 = 800$ total datasets; single-dataset seed per replicate `job_seed <- base_seed + (s * 100000L) + it * 37L`).
 * **Sample Size & Follow-up:** $N = 1,000$ patients per dataset | Follow-up horizon $\tau = 30\text{ days}$ | Target trial grace period $m = 10\text{ days}$.
-* **Total Model Fits:** $15,200$ model evaluations ($19$ estimator-specification configurations $\times 100$ replicates $\times 8$ scenarios).
+* **Total Model Fits:** $12,000$ Option-1 evaluations across $15$ allowable configurations ($9$ baseline marginal series plotted across all $5 \times 4$ trajectory grids; $6$ HR-only conditional Cox specifications omitted from baseline marginal panels and evaluated separately in Section 5).
 * **Master Deliverables:**
   * Master Dataset: [`sim/simulation_results_100iter.rds`](file:///Users/jacobtiegs/projects/tmle_tte/sim/simulation_results_100iter.rds) and [`sim/simulation_results_100iter.csv`](file:///Users/jacobtiegs/projects/tmle_tte/sim/simulation_results_100iter.csv)
-  * Master Excel Workbook: [`sim/simulation_results_100iter.xlsx`](file:///Users/jacobtiegs/projects/tmle_tte/sim/simulation_results_100iter.xlsx) (`Monte Carlo Summary`, `Runtime Benchmarks`, and `Scenario 1`–`Scenario 8`)
+  * Master Excel Workbook: [`sim/simulation_results_100iter.xlsx`](file:///Users/jacobtiegs/projects/tmle_tte/sim/simulation_results_100iter.xlsx) (`Monte Carlo Summary`, `Conditional Cox HRs`, `Runtime Benchmarks`, and `Scenario 1`–`Scenario 8`)
   * Publication Figures: [`sim/figures/scenario_1..8_benchmark_100iter.png`](file:///Users/jacobtiegs/projects/tmle_tte/sim/figures/)
 
 ---
@@ -47,7 +47,7 @@ Each scenario figure (`sim/figures/scenario_1..8_benchmark_100iter.png`, generat
 
 ## 2. Estimator Categorization (3-Tier Y-Axis Layout) & Technical Details
 
-Every panel organizes the 17 plotted series (separated by horizontal dashed dividers) into **three specification tiers** from top to bottom:
+Every panel organizes the **9 cleanly comparable baseline marginal series** (separated by horizontal dashed dividers) into **three specification tiers** from top to bottom:
 
 ### Tier 1 (Top — Green Filled Triangles `#2CA02C`): Non-Parametric Machine Learning (Fit Once per Dataset)
 1. **`TTE-TMLE (BART)`** ([`fit_bart_pair()`](file:///Users/jacobtiegs/projects/tmle_tte/R/09_bart_gcomp.R#L22-L280) + [`run_bart_survival.py`](file:///Users/jacobtiegs/projects/tmle_tte/inst/python/run_bart_survival.py))
@@ -58,22 +58,18 @@ Every panel organizes the 17 plotted series (separated by horizontal dashed divi
 3. **`TTE-TMLE (SuperLearner)`** ([`tte_tmle()`](file:///Users/jacobtiegs/projects/tmle_tte/R/07_tte_tmle.R#L17-L165))
    * **Architecture:** Replaces parametric GLMs for $Q$ and $g$ with a 4-learner adaptive `SuperLearner` library (`c("SL.mean", "SL.glm.time.int", "SL.earth.int", "SL.hal.time")`) combining natural cubic time-by-covariate splines, data-adaptive degree-2 MARS hinges, and 0th-order Highly Adaptive Lasso 1-day step functions, followed by decoupled TMLE targeting and EIC multiplier bootstrap inference.
 
-### Tier 2 (Middle — Filled Shapes: Blue `#1F77B4` for TMLE/CCW, Red `#D62728` for Cox): Parametric Benchmarks [Correct Functional Form]
+### Tier 2 (Middle — Filled Shapes: Blue `#1F77B4` for TMLE/CCW-KM, Red `#D62728` for Time-Matched Cox): Parametric Benchmarks [Correct Functional Form]
 4. **`TTE-TMLE (GLM) [Corr]`** *(Filled Blue Triangle)*: Parametric TTE-TMLE under **Regime 1 (Correct $Q$ + Correct $g$)** using exact true functional forms (`p_form_corr`, `q_form_corr`).
 5. **`CCW-KM [Corr]`** *(Filled Blue Circle)*: Clone-Censor-Weighted non-parametric Kaplan-Meier with correctly specified propensity weights $g(t)$ and EIC multiplier bootstrap inference.
-6. **`CCW-CPHM [Corr]`** *(Filled Blue Circle)*: Clone-Censor-Weighted Cox proportional hazards model marginalized over baseline covariates $W_i$ with exact EIC delta-method standard errors for `RD(15)`, `RD(30)`, and `RMSTD`.
-7. **`Time-Matched Cox [Corr]`** *(Filled Red Square)*: 1:1 risk-set exposure-density propensity-matched Cox model ([`fit_time_matched_cox()`](file:///Users/jacobtiegs/projects/tmle_tte/R/08_benchmarks.R#L180-L322)) aligning index times at treatment initiation day $d_i \le 10$.
-8. **`Time-Dependent Cox [Corr]`** *(Filled Red Square)*: Counting-process Cox model `coxph(Surv(tstart, tstop, event) ~ A(t) + W)` splitting person-time at treatment switch.
-9. **`Landmark Cox [Corr]`** *(Filled Red Square)*: Landmark Cox analysis at $t = 10\text{ days}$ restricting follow-up to survivors past the grace period ($T > 10$).
-10. **`Naive Cox [Corr]`** *(Filled Red Square)*: Baseline Cox model classifying individuals at $t=0$ by whether they *ever* initiated treatment (`tx_ever`).
+6. **`Time-Matched Cox [Corr]`** *(Filled Red Square)*: 1:1 risk-set exposure-density propensity-matched Cox model ([`fit_time_matched_cox()`](file:///Users/jacobtiegs/projects/tmle_tte/R/08_benchmarks.R#L386-L485)) aligning index times at initiation day $d_i \le 10$, standardized onto the untreated cohort baseline hazard with deterministic empirical switch-day integration, patient-level nonparametric bootstrap inference (`n_boot = 200`), and cumulative `Marginal HR(30) = log S1(30) / log S0(30)`.
 
-### Tier 3 (Bottom — Open/Unfilled Shapes: Blue `#1F77B4` for TMLE/CCW, Red `#D62728` for Cox): Parametric Benchmarks [Misspecified Functional Form]
-11–17. **`TTE-TMLE (GLM) [Mis]`** *(Open Blue Triangle, Regime 4: Misspecified $Q$ + Misspecified $g$)*, **`CCW-KM [Mis]`** *(Open Blue Circle)*, **`CCW-CPHM [Mis]`** *(Open Blue Circle)*, **`Time-Matched Cox [Mis]`** *(Open Red Square)*, **`Time-Dependent Cox [Mis]`** *(Open Red Square)*, **`Landmark Cox [Mis]`** *(Open Red Square)*, and **`Naive Cox [Mis]`** *(Open Red Square)*: All evaluated on the exact same dataset using misspecified functional forms (`p_form_mis`, `q_form_mis`)—coarsening `x1` into binary `I(x1 > 0)` in Scenario 1, and using simple additive linear main effects (`w1 + w2`, or `w1 + w2 + w_prog` in Scenario 4) in Scenarios 2–8 **without ever omitting variables**.
+### Tier 3 (Bottom — Open/Unfilled Shapes: Blue `#1F77B4` for TMLE/CCW-KM, Red `#D62728` for Time-Matched Cox): Parametric Benchmarks [Misspecified Functional Form]
+7–9. **`TTE-TMLE (GLM) [Mis]`** *(Open Blue Triangle, Regime 4: Misspecified $Q$ + Misspecified $g$)*, **`CCW-KM [Mis]`** *(Open Blue Circle)*, and **`Time-Matched Cox [Mis]`** *(Open Red Square)*: All evaluated on the exact same dataset using misspecified functional forms (`p_form_mis`, `q_form_mis`)—coarsening `x1` into binary `I(x1 > 0)` in Scenario 1, and using simple additive linear main effects (`w1 + w2`, or `w1 + w2 + w_prog` in Scenario 4) in Scenarios 2–8 **without ever omitting variables**.
 
 > [!NOTE]
-> **Universal `NA` Disclaimers:**
-> * **`Landmark Cox` RMSTD:** Set to `NA` by construction across all panels and tables because Landmark analysis discards Days 1–10 and only estimates survival conditional on surviving past Day 10 ($S(t \mid T > 10)$ for $t \in [11, 30]$), making 30-day cumulative area-under-the-curve (`RMSTD(30)`) undefined.
-> * **Cox Simultaneous Confidence Bands:** `Uniform Band Cov (%)`, `Pointwise Band Cov (%)`, and `Mean Band Width` are `NA` for `Naive Cox`, `Landmark Cox`, `Time-Dependent Cox`, `Time-Matched Cox`, and `CCW-CPHM` because semi-parametric Cox models estimate scalar hazard ratios rather than full-trajectory simultaneous risk-difference bands.
+> **Option 1 Scope & `NA` Disclaimers:**
+> * **Why `Landmark Cox` and `Time-Dependent Cox` Are Evaluated Only in Section 5 (Conditional Cox HRs):** `Landmark Cox` excludes Days 1–10 (estimating $S(t \mid T > 10)$ rather than $t = 0$ marginal survival), and `Time-Dependent Cox` models an instantaneous conditional hazard ratio without identifying static grace-period counterfactual survival curves. To prohibit non-allowable comparisons from the get-go, both return `NA` for baseline `RD(15)`, `RD(30)`, `RMSTD(30)`, and `Marginal HR(30)` and are reported exclusively via their native conditional Cox HRs in **Section 5** and the Excel **`Conditional Cox HRs`** sheet.
+> * **`Time-Matched Cox` Simultaneous Confidence Bands:** `Uniform Band Cov (%)`, `Pointwise Band Cov (%)`, and `Mean Band Width` are `NA` for `Time-Matched Cox` because semi-parametric Cox regression does not construct simultaneous whole-trajectory confidence bands.
 
 ---
 
@@ -81,11 +77,10 @@ Every panel organizes the 17 plotted series (separated by horizontal dashed divi
 
 ### A. Complete 4-Regime Double Robustness Verification of `TTE-TMLE (GLM)`
 In addition to **Regime 1 (Corr Q + Corr g)** and **Regime 4 (Mis Q + Mis g)** shown on the comparative plots, `TTE-TMLE (GLM)` was evaluated on every dataset under **Regime 2 (Mis Q + Corr g)** and **Regime 3 (Corr Q + Mis g)**. Across all baseline-identifiable scenarios (Scenarios 1–5, 7–8):
-* **Regime 1 (Corr Q + Corr g):** Mean $|\text{Bias}(30)| \le 0.0004 - 0.0102$, empirical 95% coverage $90.0\% - 97.0\%$, and uniform simultaneous band coverage $89.0\% - 94.0\%$ (except Scenario 3's sharp Day-15 kink where smooth GLMs cannot bend at a single point).
-* **Regime 2 (Mis Q + Corr g):** When the outcome model $Q$ is misspecified as simple linear terms (`w1 + w2`) while $g$ is correct, the IPCW clever covariates **completely rescue consistency**, holding $\text{Bias}(30)$ between $+0.0007$ and $-0.0200$ with $90.0\% - 97.0\%$ pointwise coverage and $78.0\% - 96.0\%$ uniform band coverage.
-* **Regime 3 (Corr Q + Mis g):** When the propensity model $g$ is misspecified while $Q$ is correct, outcome-surface marginalization **completely eliminates bias**, achieving $\text{Bias}(30)$ between $-0.0006$ and $+0.0127$ with $91.0\% - 99.0\%$ pointwise coverage and $84.0\% - 94.0\%$ uniform band coverage.
-* **Regime 4 (Mis Q + Mis g):** Only when **both** $Q$ and $g$ are simultaneously misspecified does `TTE-TMLE (GLM)` break down ($\text{Bias}(30) = -0.0486$ in Scenario 2, $-0.0614$ in Scenario 5, and $-0.0794$ in Scenario 7, with coverage collapsing to $19.0\% - 59.0\%$).
-
+* **Regime 1 (Corr Q + Corr g):** Mean $|\text{Bias}(30)| \le 0.0004 - 0.0085$, empirical 95% coverage $92.0\% - 97.0\%$, and uniform simultaneous band coverage $98.0\% - 100.0\%$ (except Scenario 3's sharp Day-15 kink at $76.0\%$).
+* **Regime 2 (Mis Q + Corr g):** When the outcome model $Q$ is misspecified as simple linear terms (`w1 + w2`) while $g$ is correct (`ns(t, 3) * p_form` with aligned conditional grace-period weights), the IPCW clever covariates **completely rescue consistency**, holding $\text{Bias}(30)$ between $-0.0111$ and $+0.0044$ with $94.0\% - 98.0\%$ pointwise coverage and $94.0\% - 100.0\%$ uniform band coverage ($73.0\%$ in Scenario 3).
+* **Regime 3 (Corr Q + Mis g):** When the propensity model $g$ is misspecified while $Q$ is correct, outcome-surface marginalization **completely eliminates bias**, achieving $\text{Bias}(30)$ between $-0.0044$ and $+0.0128$ with $93.0\% - 98.0\%$ pointwise coverage and $98.0\% - 100.0\%$ uniform band coverage ($73.0\%$ in Scenario 3).
+* **Regime 4 (Mis Q + Mis g):** Only when **both** $Q$ and $g$ are simultaneously misspecified does `TTE-TMLE (GLM)` break down ($\text{Bias}(30) = -0.0493$ in Scenario 2, $-0.0639$ in Scenario 5, and $-0.0819$ in Scenario 7, with coverage collapsing to $23.0\% - 62.0\%$).
 ### B. Machine Learning Triumph: Why `TTE-TMLE (BART)` Outperforms Pure `G-COMP (BART)` and `SuperLearner`
 * **Targeting Removes Bayesian Shrinkage Bias:** In pure `G-COMP (BART)`, sum-of-trees regularization priors shrink daily hazard predictions toward the grand mean, creating a persistent downward bias on `RD(30)` ($-0.0215$ in Scenario 2, $-0.0178$ in Scenario 5, $-0.0239$ in Scenario 7) and under-covered credible intervals ($74.0\% - 89.0\%$ pointwise; $52.0\% - 71.0\%$ uniform band). Adding the R TMLE fluctuation step in **`TTE-TMLE (BART)`** cuts bias nearly in half ($-0.0129$ in Scenario 2, $-0.0100$ in Scenario 5, $-0.0132$ in Scenario 7), restoring pointwise coverage to **$92.0\% - 98.0\%$** and uniform simultaneous band coverage to **$89.0\% - 98.0\%$**!
 * **3x–12x Faster Than `SuperLearner`:** `TTE-TMLE (BART)` completes in **4.5–5.5 seconds per dataset** (vs. **13.1–66.5 seconds** for `TTE-TMLE (SuperLearner)`), while achieving equal or superior RMSE and coverage across 7 of the 8 scenarios.
@@ -96,7 +91,7 @@ In addition to **Regime 1 (Corr Q + Corr g)** and **Regime 4 (Mis Q + Mis g)** s
 
 ### Scenario 1: Structural Baseline (Linear Confounding & Grace Period Uptake)
 * **Plain-Language Clinical Story:** A single continuous baseline severity score ($x_1$, e.g., an admission physiology score) drives both treatment initiation during the 10-day grace window and mortality risk ([`01_dgp_structural_baseline.R`](file:///Users/jacobtiegs/projects/tmle_tte/sim/dgp/01_dgp_structural_baseline.R)).
-* **The "Sneaky" Epidemiological Trap (Immortal Time & Coarsening):** Patients initiating treatment on Day $d \le 10$ had to survive until $d-1$ to receive treatment. `Naive Cox` grants treated patients immortal time credit (`RMSTD Bias = +0.528 days`), while `Landmark Cox` discards all early deaths in Days 1–10 (`Bias(15) = -0.0354`). Under Regime 4 (`I(x1 > 0)` dichotomization), standard Cox and CCW models suffer severe residual confounding (`Bias(30)` of $-0.0324$ to $-0.0710$).
+* **The "Sneaky" Epidemiological Trap (Functional Form Coarsening & Double Robustness):** When continuous baseline severity $x_1$ is coarsened to binary `I(x1 > 0)`, `CCW-KM [Mis]` (`Bias(30) = -0.0165`) and `Time-Matched Cox [Mis]` (`Bias(30) = -0.0158`, `Cov(30) = 89.0%`) incur residual confounding bias. Under Regime 2 (`Mis Q + Corr g`: `Bias(30) = +0.0044`, `98.0%` cov) and Regime 3 (`Corr Q + Mis g`: `Bias(30) = +0.0046`, `98.0%` cov), `TTE-TMLE (GLM)` remains completely unbiased.
 * **Oracle Ground Truth (`N = 200,000` CRN):** `RD(15) = +0.1004` | `RD(30) = +0.2405` | `RMSTD(30) = +3.231 days` | `Marginal HR(30) = 0.4259`.
 
 | Estimator | Regime / Spec | Bias(15) | Bias(30) | RMSE(30) | 95% Cov(30) | CI Width | Band Cov | RMSTD Bias | RMSTD Cov | Mean Time |
@@ -104,22 +99,14 @@ In addition to **Regime 1 (Corr Q + Corr g)** and **Regime 4 (Mis Q + Mis g)** s
 | **TTE-TMLE (BART)** | Non-Parametric | +0.0007 | +0.0029 | 0.0250 | 97.0% | 0.1021 | 95.0% | +0.041 | 94.0% | 5.54s |
 | **G-COMP (BART)** | Non-Parametric | -0.0042 | -0.0067 | 0.0256 | 89.0% | 0.0904 | 71.0% | -0.108 | 84.0% | 5.90s |
 | **TTE-TMLE (SuperLearner)** | Non-Parametric | -0.0063 | -0.0043 | 0.0257 | 100.0% | 0.1007 | 90.0% | -0.100 | 91.0% | 66.54s |
-| **TTE-TMLE (GLM)** | GLM: Corr Q + Corr g | -0.0007 | +0.0050 | 0.0254 | 96.0% | 0.1007 | 91.0% | +0.064 | 90.0% | 1.07s |
-| **TTE-TMLE (GLM)** | GLM: Mis Q + Corr g | -0.0007 | +0.0037 | 0.0252 | 97.0% | 0.1022 | 89.0% | +0.059 | 89.0% | 0.85s |
-| **TTE-TMLE (GLM)** | GLM: Corr Q + Mis g | -0.0008 | +0.0050 | 0.0252 | 97.0% | 0.1013 | 86.0% | +0.061 | 88.0% | 0.84s |
-| **TTE-TMLE (GLM)** | GLM: Mis Q + Mis g | -0.0093 | -0.0149 | 0.0289 | 91.0% | 0.1024 | 86.0% | -0.214 | 87.0% | 0.84s |
-| **CCW-KM** | Correct | -0.0188 | -0.0144 | 0.0276 | 94.0% | 0.1033 | 34.0% | -0.380 | 79.0% | 0.44s |
-| **CCW-KM** | Misspecified | -0.0270 | -0.0324 | 0.0401 | 78.0% | 0.1026 | 9.0% | -0.634 | 51.0% | 0.40s |
-| **CCW-CPHM** | Correct | +0.0208 | -0.0232 | 0.0322 | 77.0% | 0.0815 | — | +0.349 | 78.0% | 0.21s |
-| **CCW-CPHM** | Misspecified | +0.0091 | -0.0415 | 0.0470 | 51.0% | 0.0825 | — | +0.022 | 92.0% | 0.29s |
-| **Time-Matched Cox** | Correct | +0.0013 | +0.0042 | 0.0252 | 89.0% | 0.0837 | — | +0.052 | 82.0% | 0.12s |
-| **Time-Matched Cox** | Misspecified | -0.0084 | -0.0158 | 0.0305 | 86.0% | 0.0865 | — | -0.237 | 79.0% | 0.10s |
-| **Time-Dependent Cox** | Correct | +0.0021 | +0.0175 | 0.0329 | 82.0% | 0.0843 | — | +0.145 | 81.0% | 0.09s |
-| **Time-Dependent Cox** | Misspecified | -0.0336 | -0.0594 | 0.0634 | 11.0% | 0.0638 | — | -0.955 | 3.0% | 0.07s |
-| **Landmark Cox** | Correct | -0.0354 | +0.0059 | 0.0285 | 97.0% | 0.1163 | — | — | — | 0.01s |
-| **Landmark Cox** | Misspecified | -0.0586 | -0.0704 | 0.0741 | 34.0% | 0.1177 | — | — | — | 0.00s |
-| **Naive Cox** | Correct | +0.0215 | +0.0015 | 0.0275 | 97.0% | 0.1160 | — | +0.528 | 85.0% | 0.01s |
-| **Naive Cox** | Misspecified | -0.0208 | -0.0710 | 0.0743 | 32.0% | 0.1221 | — | -0.711 | 85.0% | 0.00s |
+| **TTE-TMLE (GLM)** | GLM: Corr Q + Corr g | -0.0015 | +0.0043 | 0.0254 | 97.0% | 0.1058 | 100.0% | +0.044 | 96.0% | 1.54s |
+| **TTE-TMLE (GLM)** | GLM: Mis Q + Corr g | -0.0005 | +0.0044 | 0.0253 | 98.0% | 0.1074 | 100.0% | +0.067 | 97.0% | 1.26s |
+| **TTE-TMLE (GLM)** | GLM: Corr Q + Mis g | -0.0013 | +0.0046 | 0.0249 | 98.0% | 0.1059 | 100.0% | +0.049 | 94.0% | 1.25s |
+| **TTE-TMLE (GLM)** | GLM: Mis Q + Mis g | -0.0100 | -0.0154 | 0.0290 | 93.0% | 0.1072 | 99.0% | -0.231 | 90.0% | 1.28s |
+| **CCW-KM** | Correct | -0.0004 | +0.0031 | 0.0249 | 100.0% | 0.1084 | 97.0% | +0.034 | 98.0% | 0.66s |
+| **CCW-KM** | Misspecified | -0.0092 | -0.0165 | 0.0296 | 92.0% | 0.1072 | 92.0% | -0.238 | 90.0% | 0.63s |
+| **Time-Matched Cox** | Correct | +0.0013 | +0.0042 | 0.0252 | 97.0% | 0.1043 | — | +0.053 | 98.0% | 6.00s |
+| **Time-Matched Cox** | Misspecified | -0.0084 | -0.0158 | 0.0305 | 89.0% | 0.1072 | — | -0.238 | 89.0% | 6.39s |
 
 ![Scenario 1 Benchmark](figures/scenario_1_benchmark_100iter.png)
 
@@ -127,7 +114,7 @@ In addition to **Regime 1 (Corr Q + Corr g)** and **Regime 4 (Mis Q + Mis g)** s
 
 ### Scenario 2: Severe Non-Linear & Interaction Confounding (Exponential + Quadratic + Threshold Gate)
 * **Plain-Language Clinical Story:** Treatment prescribing and mortality risk follow a sharp exponential and quadratic relationship in $w_1$ plus a clinical guideline threshold gate ($w_1 > 3.8 \ \& \ w_2 = 1$) ([`02_dgp_misspecification.R`](file:///Users/jacobtiegs/projects/tmle_tte/sim/dgp/02_dgp_misspecification.R)). This serves as the foundational non-linear DGP for Scenarios 2–8.
-* **The "Sneaky" Epidemiological Trap (Main-Effects Functional Form Failure):** When parametric models plug in standard additive straight lines (`w1 + w2`) in Regime 4, `TTE-TMLE (GLM) [Mis]` drops to $59.0\%$ coverage (`Bias(30) = -0.0486`) and `CCW-KM [Mis]` drops to $24.0\%$ coverage (`Bias(30) = -0.0726`). Meanwhile, `TTE-TMLE (BART)` (`94.0%` cov, `91.0%` uniform band cov) and `TTE-TMLE (SuperLearner)` (`92.0%` cov, `92.0%` uniform band cov) discover the non-linear surface automatically from raw covariates!
+* **The "Sneaky" Epidemiological Trap (Main-Effects Functional Form Failure):** When parametric models plug in standard additive straight lines (`w1 + w2`) in Regime 4, `TTE-TMLE (GLM) [Mis]` drops to $62.0\%$ coverage (`Bias(30) = -0.0493`) and `CCW-KM [Mis]` drops to $52.0\%$ coverage (`Bias(30) = -0.0537`), whereas correctly specified `TTE-TMLE (GLM)` (`Bias = -0.0036`, `95.0%` cov) and `CCW-KM [Corr]` (`Bias = -0.0121`, `94.0%` cov) remain well calibrated. Meanwhile, `TTE-TMLE (BART)` (`94.0%` cov, `91.0%` uniform band cov) and `TTE-TMLE (SuperLearner)` (`92.0%` cov, `92.0%` uniform band cov) discover the non-linear surface automatically from raw covariates!
 * **Oracle Ground Truth (`N = 200,000` CRN):** `RD(15) = +0.1242` | `RD(30) = +0.2543` | `RMSTD(30) = +3.688 days` | `Marginal HR(30) = 0.4650`.
 
 | Estimator | Regime / Spec | Bias(15) | Bias(30) | RMSE(30) | 95% Cov(30) | CI Width | Band Cov | RMSTD Bias | RMSTD Cov | Mean Time |
@@ -135,22 +122,14 @@ In addition to **Regime 1 (Corr Q + Corr g)** and **Regime 4 (Mis Q + Mis g)** s
 | **TTE-TMLE (BART)** | Non-Parametric | -0.0059 | -0.0129 | 0.0267 | 94.0% | 0.1011 | 91.0% | -0.144 | 93.0% | 4.82s |
 | **G-COMP (BART)** | Non-Parametric | -0.0124 | -0.0215 | 0.0312 | 83.0% | 0.0879 | 59.0% | -0.320 | 81.0% | 5.13s |
 | **TTE-TMLE (SuperLearner)** | Non-Parametric | -0.0122 | -0.0165 | 0.0287 | 92.0% | 0.1003 | 92.0% | -0.261 | 90.0% | 15.94s |
-| **TTE-TMLE (GLM)** | GLM: Corr Q + Corr g | -0.0039 | -0.0041 | 0.0242 | 95.0% | 0.0987 | 93.0% | -0.037 | 92.0% | 1.08s |
-| **TTE-TMLE (GLM)** | GLM: Mis Q + Corr g | -0.0122 | -0.0167 | 0.0296 | 92.0% | 0.1016 | 93.0% | -0.268 | 89.0% | 0.86s |
-| **TTE-TMLE (GLM)** | GLM: Corr Q + Mis g | -0.0046 | -0.0052 | 0.0244 | 95.0% | 0.1029 | 93.0% | -0.057 | 92.0% | 0.86s |
-| **TTE-TMLE (GLM)** | GLM: Mis Q + Mis g | -0.0298 | -0.0486 | 0.0548 | 59.0% | 0.1055 | 68.0% | -0.788 | 48.0% | 0.80s |
-| **CCW-KM** | Correct | -0.0389 | -0.0440 | 0.0504 | 64.0% | 0.1048 | 27.0% | -0.872 | 36.0% | 0.46s |
-| **CCW-KM** | Misspecified | -0.0567 | -0.0726 | 0.0769 | 24.0% | 0.1060 | 1.0% | -1.364 | 2.0% | 0.41s |
-| **CCW-CPHM** | Correct | +0.0095 | -0.0522 | 0.0563 | 29.0% | 0.0807 | — | +0.073 | 91.0% | 0.27s |
-| **CCW-CPHM** | Misspecified | -0.0117 | -0.0884 | 0.0911 | 1.0% | 0.0875 | — | -0.539 | 74.0% | 0.26s |
-| **Time-Matched Cox** | Correct | -0.0009 | -0.0056 | 0.0236 | 94.0% | 0.0897 | — | -0.026 | 91.0% | 0.15s |
-| **Time-Matched Cox** | Misspecified | -0.0255 | -0.0526 | 0.0576 | 40.0% | 0.0950 | — | -0.726 | 40.0% | 0.13s |
-| **Time-Dependent Cox** | Correct | -0.0169 | +0.0013 | 0.0275 | 89.0% | 0.0877 | — | -0.242 | 84.0% | 0.11s |
-| **Time-Dependent Cox** | Misspecified | -0.0393 | -0.0570 | 0.0624 | 30.0% | 0.0863 | — | -0.996 | 7.0% | 0.09s |
-| **Landmark Cox** | Correct | -0.0718 | -0.0441 | 0.0501 | 85.0% | 0.1304 | — | — | — | 0.01s |
-| **Landmark Cox** | Misspecified | -0.0697 | -0.0623 | 0.0680 | 63.0% | 0.1386 | — | — | — | 0.00s |
-| **Naive Cox** | Correct | -0.0241 | -0.0513 | 0.0564 | 70.0% | 0.1255 | — | -0.567 | 96.0% | 0.01s |
-| **Naive Cox** | Misspecified | -0.0335 | -0.0933 | 0.0970 | 15.0% | 0.1351 | — | -0.982 | 76.0% | 0.00s |
+| **TTE-TMLE (GLM)** | GLM: Corr Q + Corr g | -0.0034 | -0.0036 | 0.0243 | 95.0% | 0.1060 | 98.0% | -0.026 | 98.0% | 1.53s |
+| **TTE-TMLE (GLM)** | GLM: Mis Q + Corr g | -0.0050 | -0.0094 | 0.0260 | 95.0% | 0.1101 | 98.0% | -0.100 | 96.0% | 1.25s |
+| **TTE-TMLE (GLM)** | GLM: Corr Q + Mis g | -0.0042 | -0.0044 | 0.0240 | 95.0% | 0.1075 | 98.0% | -0.045 | 97.0% | 1.26s |
+| **TTE-TMLE (GLM)** | GLM: Mis Q + Mis g | -0.0304 | -0.0493 | 0.0553 | 62.0% | 0.1106 | 85.0% | -0.804 | 54.0% | 1.21s |
+| **CCW-KM** | Correct | -0.0092 | -0.0121 | 0.0277 | 94.0% | 0.1157 | 93.0% | -0.197 | 95.0% | 0.69s |
+| **CCW-KM** | Misspecified | -0.0373 | -0.0537 | 0.0595 | 52.0% | 0.1106 | 53.0% | -0.920 | 46.0% | 0.59s |
+| **Time-Matched Cox** | Correct | -0.0009 | -0.0056 | 0.0236 | 97.0% | 0.1037 | — | -0.026 | 96.0% | 7.34s |
+| **Time-Matched Cox** | Misspecified | -0.0255 | -0.0527 | 0.0576 | 53.0% | 0.1059 | — | -0.727 | 62.0% | 6.44s |
 
 ![Scenario 2 Benchmark](figures/scenario_2_benchmark_100iter.png)
 
@@ -158,7 +137,7 @@ In addition to **Regime 1 (Corr Q + Corr g)** and **Regime 4 (Mis Q + Mis g)** s
 
 ### Scenario 3: Non-Proportional Hazards & Day-15 Treatment Efficacy Waning
 * **Plain-Language Clinical Story:** Built on Scenario 2's non-linear confounding, treatment cuts daily mortality risk by 80% during Days 1–15 ($\text{HR} = 0.20$), but after Day 15 the protective effect stops and slightly rebounds ($\text{HR} = 1.10$ on Days 16–30) ([`03_dgp_waning_nph.R`](file:///Users/jacobtiegs/projects/tmle_tte/sim/dgp/03_dgp_waning_nph.R)).
-* **The "Sneaky" Epidemiological Trap (Broken Proportional Hazards & Kink Smoothing):** Every Cox model forces a single constant hazard ratio across all 30 days, severely under-predicting the peak Day-15 survival benefit (`Bias(15)` between $-0.1108$ and $-0.1663$) and distorting 30-day RMSTD by $-0.81$ to $-2.18\text{ days}$. By omitting plain linear `SL.glm`, `TTE-TMLE (SuperLearner)` leverages its 1-day HAL step indicators (`SL.hal.time`) and data-adaptive MARS hinges (`SL.earth.int`) to capture the Day-15 kink without peeking, achieving the lowest `Bias(15)` ($-0.0215$), lowest `RMSTD Bias` ($-0.139\text{ days}$), and **81.0% uniform simultaneous band coverage**!
+* **The "Sneaky" Epidemiological Trap (Broken Proportional Hazards & Kink Smoothing):** The proportional-hazards comparator (`Time-Matched Cox`) forces a single constant treatment hazard ratio across all 30 days, severely under-predicting the peak Day-15 survival benefit (`Bias(15) = -0.1108` `[Corr]`, `-0.1412` `[Mis]`) and distorting 30-day RMSTD by `-0.808` to `-1.660` days (`57.0%` and `7.0%` RMSTD coverage). By omitting plain linear `SL.glm`, `TTE-TMLE (SuperLearner)` leverages its 1-day HAL step indicators (`SL.hal.time`) and data-adaptive MARS hinges (`SL.earth.int`) to capture the Day-15 kink without peeking, achieving the lowest `Bias(15)` ($-0.0215$), lowest `RMSTD Bias` ($-0.139\text{ days}$), and **81.0% uniform simultaneous band coverage**!
 * **Oracle Ground Truth (`N = 200,000` CRN):** `RD(15) = +0.1632` | `RD(30) = +0.0507` | `RMSTD(30) = +2.270 days` | `Marginal HR(30) = 0.8701`.
 
 | Estimator | Regime / Spec | Bias(15) | Bias(30) | RMSE(30) | 95% Cov(30) | CI Width | Band Cov | RMSTD Bias | RMSTD Cov | Mean Time |
@@ -166,22 +145,14 @@ In addition to **Regime 1 (Corr Q + Corr g)** and **Regime 4 (Mis Q + Mis g)** s
 | **TTE-TMLE (BART)** | Non-Parametric | -0.0383 | -0.0025 | 0.0286 | 95.0% | 0.1089 | 58.0% | -0.219 | 89.0% | 4.83s |
 | **G-COMP (BART)** | Non-Parametric | -0.0417 | -0.0035 | 0.0292 | 94.0% | 0.0981 | 30.0% | -0.286 | 78.0% | 5.12s |
 | **TTE-TMLE (SuperLearner)** | Non-Parametric | -0.0215 | -0.0116 | 0.0309 | 91.0% | 0.1076 | 81.0% | -0.139 | 84.0% | 16.65s |
-| **TTE-TMLE (GLM)** | GLM: Corr Q + Corr g | -0.0381 | +0.0023 | 0.0275 | 94.0% | 0.1064 | 49.0% | +0.202 | 85.0% | 1.09s |
-| **TTE-TMLE (GLM)** | GLM: Mis Q + Corr g | -0.0456 | -0.0044 | 0.0272 | 95.0% | 0.1104 | 37.0% | +0.026 | 90.0% | 0.87s |
-| **TTE-TMLE (GLM)** | GLM: Corr Q + Mis g | -0.0385 | +0.0026 | 0.0268 | 97.0% | 0.1087 | 48.0% | +0.197 | 88.0% | 0.86s |
-| **TTE-TMLE (GLM)** | GLM: Mis Q + Mis g | -0.0654 | -0.0450 | 0.0531 | 67.0% | 0.1138 | 16.0% | -0.599 | 65.0% | 0.81s |
-| **CCW-KM** | Correct | -0.0388 | -0.0377 | 0.0459 | 78.0% | 0.1116 | 21.0% | -0.825 | 47.0% | 0.46s |
-| **CCW-KM** | Misspecified | -0.0551 | -0.0721 | 0.0772 | 35.0% | 0.1111 | 1.0% | -1.400 | 5.0% | 0.41s |
-| **CCW-CPHM** | Correct | -0.1238 | +0.0145 | 0.0269 | 90.0% | 0.0915 | — | -1.072 | 27.0% | 0.26s |
-| **CCW-CPHM** | Misspecified | -0.1567 | -0.0405 | 0.0472 | 66.0% | 0.0991 | — | -2.078 | 0.0% | 0.28s |
-| **Time-Matched Cox** | Correct | -0.1108 | +0.0417 | 0.0513 | 63.0% | 0.1069 | — | -0.807 | 51.0% | 0.15s |
-| **Time-Matched Cox** | Misspecified | -0.1412 | -0.0126 | 0.0321 | 90.0% | 0.1109 | — | -1.660 | 4.0% | 0.13s |
-| **Time-Dependent Cox** | Correct | -0.1347 | +0.0439 | 0.0532 | 67.0% | 0.1158 | — | -1.061 | 21.0% | 0.11s |
-| **Time-Dependent Cox** | Misspecified | -0.1512 | -0.0135 | 0.0322 | 91.0% | 0.1129 | — | -1.786 | 0.0% | 0.09s |
-| **Landmark Cox** | Correct | -0.1571 | -0.0101 | 0.0311 | 99.0% | 0.1491 | — | — | — | 0.01s |
-| **Landmark Cox** | Misspecified | -0.1663 | -0.0695 | 0.0768 | 55.0% | 0.1505 | — | — | — | 0.00s |
-| **Naive Cox** | Correct | -0.1371 | +0.0230 | 0.0371 | 94.0% | 0.1393 | — | -1.251 | 51.0% | 0.01s |
-| **Naive Cox** | Misspecified | -0.1605 | -0.0448 | 0.0545 | 80.0% | 0.1413 | — | -2.179 | 2.0% | 0.00s |
+| **TTE-TMLE (GLM)** | GLM: Corr Q + Corr g | -0.0439 | -0.0004 | 0.0278 | 96.0% | 0.1125 | 76.0% | +0.069 | 91.0% | 1.53s |
+| **TTE-TMLE (GLM)** | GLM: Mis Q + Corr g | -0.0474 | -0.0029 | 0.0273 | 97.0% | 0.1176 | 73.0% | -0.019 | 92.0% | 1.24s |
+| **TTE-TMLE (GLM)** | GLM: Corr Q + Mis g | -0.0443 | -0.0003 | 0.0267 | 97.0% | 0.1129 | 73.0% | +0.064 | 94.0% | 1.24s |
+| **TTE-TMLE (GLM)** | GLM: Mis Q + Mis g | -0.0729 | -0.0489 | 0.0567 | 66.0% | 0.1185 | 19.0% | -0.771 | 58.0% | 1.18s |
+| **CCW-KM** | Correct | -0.0031 | -0.0088 | 0.0290 | 94.0% | 0.1209 | 94.0% | -0.103 | 96.0% | 0.68s |
+| **CCW-KM** | Misspecified | -0.0288 | -0.0548 | 0.0620 | 53.0% | 0.1150 | 52.0% | -0.868 | 51.0% | 0.63s |
+| **Time-Matched Cox** | Correct | -0.1108 | +0.0417 | 0.0513 | 65.0% | 0.1122 | — | -0.808 | 57.0% | 7.53s |
+| **Time-Matched Cox** | Misspecified | -0.1412 | -0.0126 | 0.0321 | 90.0% | 0.1121 | — | -1.660 | 7.0% | 6.59s |
 
 ![Scenario 3 Benchmark](figures/scenario_3_benchmark_100iter.png)
 
@@ -189,7 +160,7 @@ In addition to **Regime 1 (Corr Q + Corr g)** and **Regime 4 (Mis Q + Mis g)** s
 
 ### Scenario 4: Strong Prognostic Covariate (Variance Reduction & Local Efficiency)
 * **Plain-Language Clinical Story:** Beyond Scenario 2's confounders ($w_1, w_2$), the dataset includes a powerful, conditionally independent non-linear prognostic biomarker ($w_{\text{prog}}$) that strongly drives mortality but does not affect treatment assignment ([`04_dgp_prognostic_efficiency.R`](file:///Users/jacobtiegs/projects/tmle_tte/sim/dgp/04_dgp_prognostic_efficiency.R)).
-* **The "Sneaky" Epidemiological Trap (Leaving Precision on the Table):** Pure propensity-weighting (`CCW-KM`) only models treatment assignment $g(t \mid W)$ and ignores pure outcome predictors, yielding higher error (`RMSE(30) = 0.0375`, `Band Cov = 3.0%`). By modeling $w_{\text{prog}}$ in $Q$, `TTE-TMLE (BART)` achieves **virtually zero bias (`+0.0001` on `RD(30)`, `-0.016 days` on `RMSTD`)**, lower RMSE (`0.0247`), narrower confidence intervals (`0.0935`), and $89.0\%$ simultaneous band coverage.
+* **The "Sneaky" Epidemiological Trap (Leaving Precision on the Table):** Pure propensity-weighting (`CCW-KM [Corr]`) only models treatment assignment $g(t \mid W)$ and ignores pure outcome predictors, leaving precision on the table (`RMSE(30) = 0.0282`, `CI Width = 0.1012`). By modeling $w_{\text{prog}}$ in $Q$, `TTE-TMLE (BART)` achieves **virtually zero bias (`+0.0001` on `RD(30)`, `-0.016 days` on `RMSTD`)**, lower RMSE (`0.0247`), and narrower confidence intervals (`0.0935`), while `TTE-TMLE (GLM)` reaches `RMSE(30) = 0.0260` and `99.0%` band coverage.
 * **Oracle Ground Truth (`N = 200,000` CRN):** `RD(15) = +0.1654` | `RD(30) = +0.2522` | `RMSTD(30) = +4.350 days` | `Marginal HR(30) = 0.4952`.
 
 | Estimator | Regime / Spec | Bias(15) | Bias(30) | RMSE(30) | 95% Cov(30) | CI Width | Band Cov | RMSTD Bias | RMSTD Cov | Mean Time |
@@ -197,22 +168,14 @@ In addition to **Regime 1 (Corr Q + Corr g)** and **Regime 4 (Mis Q + Mis g)** s
 | **TTE-TMLE (BART)** | Non-Parametric | -0.0022 | +0.0001 | 0.0247 | 92.0% | 0.0935 | 89.0% | -0.016 | 90.0% | 4.64s |
 | **G-COMP (BART)** | Non-Parametric | -0.0088 | -0.0064 | 0.0260 | 83.0% | 0.0780 | 61.0% | -0.181 | 84.0% | 4.94s |
 | **TTE-TMLE (SuperLearner)** | Non-Parametric | -0.0105 | -0.0064 | 0.0267 | 89.0% | 0.0918 | 85.0% | -0.179 | 88.0% | 13.08s |
-| **TTE-TMLE (GLM)** | GLM: Corr Q + Corr g | +0.0041 | +0.0087 | 0.0265 | 90.0% | 0.0914 | 92.0% | +0.160 | 84.0% | 1.02s |
-| **TTE-TMLE (GLM)** | GLM: Mis Q + Corr g | -0.0066 | -0.0080 | 0.0276 | 90.0% | 0.0955 | 96.0% | -0.135 | 91.0% | 0.86s |
-| **TTE-TMLE (GLM)** | GLM: Corr Q + Mis g | +0.0036 | +0.0079 | 0.0260 | 91.0% | 0.0938 | 93.0% | +0.146 | 87.0% | 0.84s |
-| **TTE-TMLE (GLM)** | GLM: Mis Q + Mis g | -0.0219 | -0.0307 | 0.0410 | 78.0% | 0.0980 | 84.0% | -0.557 | 70.0% | 0.79s |
-| **CCW-KM** | Correct | -0.0442 | -0.0263 | 0.0375 | 81.0% | 0.0949 | 3.0% | -0.851 | 41.0% | 0.44s |
-| **CCW-KM** | Misspecified | -0.0601 | -0.0467 | 0.0545 | 52.0% | 0.0960 | 0.0% | -1.260 | 7.0% | 0.39s |
-| **CCW-CPHM** | Correct | -0.0022 | -0.0677 | 0.0700 | 4.0% | 0.0694 | — | -0.067 | 92.0% | 0.25s |
-| **CCW-CPHM** | Misspecified | -0.0171 | -0.0924 | 0.0947 | 0.0% | 0.0769 | — | -0.498 | 74.0% | 0.24s |
-| **Time-Matched Cox** | Correct | +0.0072 | +0.0069 | 0.0260 | 92.0% | 0.0927 | — | +0.184 | 82.0% | 0.13s |
-| **Time-Matched Cox** | Misspecified | -0.0203 | -0.0396 | 0.0472 | 63.0% | 0.0961 | — | -0.569 | 64.0% | 0.11s |
-| **Time-Dependent Cox** | Correct | +0.0146 | +0.0674 | 0.0726 | 31.0% | 0.1075 | — | +0.729 | 50.0% | 0.11s |
-| **Time-Dependent Cox** | Misspecified | -0.0253 | -0.0012 | 0.0303 | 88.0% | 0.1008 | — | -0.394 | 76.0% | 0.10s |
-| **Landmark Cox** | Correct | -0.0876 | +0.0290 | 0.0447 | 91.0% | 0.1590 | — | — | — | 0.01s |
-| **Landmark Cox** | Misspecified | -0.0632 | +0.0219 | 0.0472 | 88.0% | 0.1579 | — | — | — | 0.00s |
-| **Naive Cox** | Correct | -0.0367 | -0.0182 | 0.0321 | 95.0% | 0.1365 | — | -0.499 | 94.0% | 0.01s |
-| **Naive Cox** | Misspecified | -0.0287 | -0.0678 | 0.0752 | 55.0% | 0.1354 | — | -0.597 | 80.0% | 0.00s |
+| **TTE-TMLE (GLM)** | GLM: Corr Q + Corr g | +0.0038 | +0.0085 | 0.0260 | 93.0% | 0.0961 | 99.0% | +0.152 | 93.0% | 1.49s |
+| **TTE-TMLE (GLM)** | GLM: Mis Q + Corr g | -0.0014 | -0.0042 | 0.0266 | 94.0% | 0.1015 | 94.0% | -0.019 | 94.0% | 1.23s |
+| **TTE-TMLE (GLM)** | GLM: Corr Q + Mis g | +0.0037 | +0.0085 | 0.0259 | 93.0% | 0.0986 | 99.0% | +0.151 | 98.0% | 1.24s |
+| **TTE-TMLE (GLM)** | GLM: Mis Q + Mis g | -0.0222 | -0.0307 | 0.0409 | 80.0% | 0.1038 | 94.0% | -0.564 | 78.0% | 1.18s |
+| **CCW-KM** | Correct | -0.0057 | +0.0043 | 0.0282 | 92.0% | 0.1012 | 97.0% | -0.022 | 96.0% | 0.68s |
+| **CCW-KM** | Misspecified | -0.0284 | -0.0223 | 0.0364 | 86.0% | 0.1017 | 84.0% | -0.571 | 76.0% | 0.61s |
+| **Time-Matched Cox** | Correct | +0.0074 | +0.0070 | 0.0260 | 94.0% | 0.0961 | — | +0.187 | 91.0% | 7.32s |
+| **Time-Matched Cox** | Misspecified | -0.0202 | -0.0395 | 0.0471 | 62.0% | 0.0979 | — | -0.567 | 70.0% | 6.19s |
 
 ![Scenario 4 Benchmark](figures/scenario_4_benchmark_100iter.png)
 
@@ -220,7 +183,7 @@ In addition to **Regime 1 (Corr Q + Corr g)** and **Regime 4 (Mis Q + Mis g)** s
 
 ### Scenario 5: Severe Positivity Strain & Near-Violations (Weight Shock in Frail Subgroups)
 * **Plain-Language Clinical Story:** Amplifies the treatment selection coefficients on Scenario 2's non-linear confounders ($w_1, w_2$) so that high-risk subgroups almost always initiate treatment ($P(A=1 \mid W) \to 0.99$) while low-risk subgroups almost never do ($P(A=1 \mid W) \to 0.01$) ([`05_dgp_positivity_strain.R`](file:///Users/jacobtiegs/projects/tmle_tte/sim/dgp/05_dgp_positivity_strain.R)).
-* **The "Sneaky" Epidemiological Trap (Weight Shock & Truncation Drift):** Even with the exact true propensity formula (`Correct`), pure inverse-probability weighting estimators (`CCW-KM`, `CCW-CPHM`) suffer severe weight truncation drift (`Bias(30) = -0.0535`, coverage collapsing to `51.0%` and `31.0%`). Doubly robust `TTE-TMLE (GLM)` (`Bias(30) = +0.0004`, `97.0%` cov in Regime 1; `-0.0006`, `99.0%` cov in Regime 3), `TTE-TMLE (BART)` (`-0.0100`, `98.0%` cov, `98.0%` band cov), and `TTE-TMLE (SuperLearner)` (`-0.0149`, `97.0%` cov) lean on their outcome regression surface $Q$ where weights are extreme, completely neutralizing weight shock!
+* **The "Sneaky" Epidemiological Trap (Weight Shock & Truncation Drift):** Under near-positivity violations, pure inverse-probability weighting estimators `CCW-KM [Corr]` incurs residual truncation drift (`Bias(30) = -0.0226`, `RMSTD Cov = 91.0%`), and misspecified `CCW-KM [Mis]` collapses to `41.0%` coverage. Doubly robust `TTE-TMLE (GLM)` (`Bias(30) = +0.0006`, `97.0%` cov, `100.0%` band cov in Regime 1; `+0.0006`, `98.0%` cov in Regime 3), `TTE-TMLE (BART)` (`-0.0100`, `98.0%` cov, `98.0%` band cov), and `TTE-TMLE (SuperLearner)` (`-0.0149`, `97.0%` cov) lean on their outcome regression surface $Q$ where weights are extreme, neutralizing weight shock!
 * **Oracle Ground Truth (`N = 200,000` CRN):** `RD(15) = +0.1242` | `RD(30) = +0.2543` | `RMSTD(30) = +3.688 days` | `Marginal HR(30) = 0.4650`.
 
 | Estimator | Regime / Spec | Bias(15) | Bias(30) | RMSE(30) | 95% Cov(30) | CI Width | Band Cov | RMSTD Bias | RMSTD Cov | Mean Time |
@@ -228,22 +191,14 @@ In addition to **Regime 1 (Corr Q + Corr g)** and **Regime 4 (Mis Q + Mis g)** s
 | **TTE-TMLE (BART)** | Non-Parametric | -0.0052 | -0.0100 | 0.0249 | 98.0% | 0.1015 | 98.0% | -0.118 | 95.0% | 4.80s |
 | **G-COMP (BART)** | Non-Parametric | -0.0107 | -0.0178 | 0.0299 | 86.0% | 0.0880 | 65.0% | -0.269 | 84.0% | 5.11s |
 | **TTE-TMLE (SuperLearner)** | Non-Parametric | -0.0113 | -0.0149 | 0.0274 | 97.0% | 0.0997 | 91.0% | -0.245 | 89.0% | 14.60s |
-| **TTE-TMLE (GLM)** | GLM: Corr Q + Corr g | -0.0029 | +0.0004 | 0.0231 | 97.0% | 0.0982 | 94.0% | +0.011 | 93.0% | 1.10s |
-| **TTE-TMLE (GLM)** | GLM: Mis Q + Corr g | -0.0148 | -0.0138 | 0.0263 | 94.0% | 0.1003 | 89.0% | -0.296 | 84.0% | 0.86s |
-| **TTE-TMLE (GLM)** | GLM: Corr Q + Mis g | -0.0037 | -0.0006 | 0.0228 | 99.0% | 0.1062 | 94.0% | -0.011 | 95.0% | 0.86s |
-| **TTE-TMLE (GLM)** | GLM: Mis Q + Mis g | -0.0379 | -0.0614 | 0.0662 | 40.0% | 0.1101 | 46.0% | -1.014 | 26.0% | 0.81s |
-| **CCW-KM** | Correct | -0.0460 | -0.0535 | 0.0578 | 51.0% | 0.1043 | 16.0% | -1.047 | 14.0% | 0.46s |
-| **CCW-KM** | Misspecified | -0.0639 | -0.0865 | 0.0895 | 7.0% | 0.1081 | 0.0% | -1.589 | 0.0% | 0.41s |
-| **CCW-CPHM** | Correct | +0.0092 | -0.0534 | 0.0566 | 31.0% | 0.0828 | — | +0.060 | 97.0% | 0.27s |
-| **CCW-CPHM** | Misspecified | -0.0214 | -0.1023 | 0.1043 | 0.0% | 0.0945 | — | -0.809 | 52.0% | 0.28s |
-| **Time-Matched Cox** | Correct | +0.0017 | -0.0006 | 0.0261 | 95.0% | 0.0971 | — | +0.044 | 91.0% | 0.12s |
-| **Time-Matched Cox** | Misspecified | -0.0306 | -0.0610 | 0.0663 | 39.0% | 0.1045 | — | -0.867 | 33.0% | 0.11s |
-| **Time-Dependent Cox** | Correct | -0.0143 | +0.0051 | 0.0270 | 92.0% | 0.0918 | — | -0.174 | 86.0% | 0.10s |
-| **Time-Dependent Cox** | Misspecified | -0.0418 | -0.0649 | 0.0692 | 23.0% | 0.0926 | — | -1.088 | 8.0% | 0.09s |
-| **Landmark Cox** | Correct | -0.0704 | -0.0388 | 0.0446 | 83.0% | 0.1282 | — | — | — | 0.01s |
-| **Landmark Cox** | Misspecified | -0.0736 | -0.0766 | 0.0801 | 41.0% | 0.1386 | — | — | — | 0.00s |
-| **Naive Cox** | Correct | -0.0218 | -0.0443 | 0.0502 | 74.0% | 0.1248 | — | -0.486 | 96.0% | 0.01s |
-| **Naive Cox** | Misspecified | -0.0437 | -0.1110 | 0.1140 | 2.0% | 0.1369 | — | -1.287 | 51.0% | 0.00s |
+| **TTE-TMLE (GLM)** | GLM: Corr Q + Corr g | -0.0022 | +0.0006 | 0.0249 | 97.0% | 0.1058 | 100.0% | +0.022 | 97.0% | 1.52s |
+| **TTE-TMLE (GLM)** | GLM: Mis Q + Corr g | -0.0045 | -0.0042 | 0.0252 | 97.0% | 0.1091 | 100.0% | -0.066 | 98.0% | 1.25s |
+| **TTE-TMLE (GLM)** | GLM: Corr Q + Mis g | -0.0027 | +0.0006 | 0.0232 | 98.0% | 0.1128 | 100.0% | +0.016 | 99.0% | 1.23s |
+| **TTE-TMLE (GLM)** | GLM: Mis Q + Mis g | -0.0399 | -0.0639 | 0.0687 | 43.0% | 0.1181 | 71.0% | -1.066 | 31.0% | 1.18s |
+| **CCW-KM** | Correct | -0.0154 | -0.0226 | 0.0335 | 95.0% | 0.1174 | 93.0% | -0.361 | 91.0% | 0.68s |
+| **CCW-KM** | Misspecified | -0.0416 | -0.0631 | 0.0677 | 41.0% | 0.1147 | 46.0% | -1.067 | 32.0% | 0.60s |
+| **Time-Matched Cox** | Correct | +0.0017 | -0.0006 | 0.0262 | 98.0% | 0.1096 | — | +0.045 | 98.0% | 5.76s |
+| **Time-Matched Cox** | Misspecified | -0.0306 | -0.0610 | 0.0663 | 50.0% | 0.1121 | — | -0.867 | 46.0% | 4.94s |
 
 ![Scenario 5 Benchmark](figures/scenario_5_benchmark_100iter.png)
 
@@ -251,7 +206,7 @@ In addition to **Regime 1 (Corr Q + Corr g)** and **Regime 4 (Mis Q + Mis g)** s
 
 ### Scenario 6: Time-Varying Confounder-Treatment Feedback (Day-3 Biomarker Collider Trap)
 * **Plain-Language Clinical Story:** During the 10-day grace window, patients who have not yet initiated treatment by Day 3 are much more likely to experience an acute organ flare ($L_{\text{med}} = 1$ at $t_{\text{med}} = 3$), which triggers rescue treatment initiation on Days 4–10 ($L_{\text{med}} \to A_{\text{late}}$) and independently increases mortality risk ($L_{\text{med}} \to Y$) ([`06_dgp_time_varying_feedback.R`](file:///Users/jacobtiegs/projects/tmle_tte/sim/dgp/06_dgp_time_varying_feedback.R)).
-* **The "Sneaky" Epidemiological Trap (Unmeasured Grace-Window Feedback):** Because the Day-3 flare $L_{\text{med}}$ is a post-baseline intermediate time-varying confounder/mediator during the grace period that is not included in baseline-only adjustments, late initiators carry higher unmeasured post-baseline risk. Baseline-adjusted `TTE-TMLE (BART)` (`Bias(30) = -0.0441`, `Band Cov = 79.0%`) and `TTE-TMLE (GLM)` (`Bias(30) = -0.0414`, `Band Cov = 73.0%`) exhibit half the bias of `CCW-KM` (`-0.0741` to `-0.1024`) and `CCW-CPHM` (`-0.0815` to `-0.1257`), demonstrating substantially greater resilience when dynamic grace-window feedback occurs.
+* **The "Sneaky" Epidemiological Trap (Unmeasured Grace-Window Feedback):** Because the Day-3 flare $L_{\text{med}}$ is a post-baseline intermediate time-varying confounder/mediator during the grace period that is not included in baseline-only adjustments, late initiators carry higher unmeasured post-baseline risk. Baseline-adjusted `TTE-TMLE (BART)` (`Bias(30) = -0.0441`, `Band Cov = 79.0%`) and `TTE-TMLE (GLM)` (`Bias(30) = -0.0398`, `Band Cov = 89.0%`) outperform `CCW-KM` (`-0.0464` to `-0.0792`), while defining the theoretical boundary where full Longitudinal TMLE (LTMLE) is required.
 * **Oracle Ground Truth (`N = 200,000` CRN):** `RD(15) = +0.2018` | `RD(30) = +0.3046` | `RMSTD(30) = +5.520 days` | `Marginal HR(30) = 0.4219`.
 
 | Estimator | Regime / Spec | Bias(15) | Bias(30) | RMSE(30) | 95% Cov(30) | CI Width | Band Cov | RMSTD Bias | RMSTD Cov | Mean Time |
@@ -259,22 +214,14 @@ In addition to **Regime 1 (Corr Q + Corr g)** and **Regime 4 (Mis Q + Mis g)** s
 | **TTE-TMLE (BART)** | Non-Parametric | -0.0301 | -0.0441 | 0.0513 | 64.0% | 0.1037 | 79.0% | -0.813 | 47.0% | 4.53s |
 | **G-COMP (BART)** | Non-Parametric | -0.0363 | -0.0490 | 0.0555 | 41.0% | 0.0876 | 22.0% | -0.963 | 30.0% | 4.80s |
 | **TTE-TMLE (SuperLearner)** | Non-Parametric | -0.0358 | -0.0502 | 0.0562 | 54.0% | 0.1026 | 60.0% | -0.932 | 36.0% | 11.91s |
-| **TTE-TMLE (GLM)** | GLM: Corr Q + Corr g | -0.0303 | -0.0414 | 0.0488 | 70.0% | 0.1017 | 73.0% | -0.788 | 50.0% | 1.01s |
-| **TTE-TMLE (GLM)** | GLM: Mis Q + Corr g | -0.0419 | -0.0474 | 0.0538 | 60.0% | 0.1050 | 62.0% | -1.053 | 29.0% | 0.86s |
-| **TTE-TMLE (GLM)** | GLM: Corr Q + Mis g | -0.0309 | -0.0415 | 0.0487 | 71.0% | 0.1059 | 71.0% | -0.801 | 52.0% | 0.85s |
-| **TTE-TMLE (GLM)** | GLM: Mis Q + Mis g | -0.0690 | -0.0822 | 0.0862 | 13.0% | 0.1085 | 5.0% | -1.768 | 2.0% | 0.78s |
-| **CCW-KM** | Correct | -0.0683 | -0.0741 | 0.0788 | 21.0% | 0.1056 | 3.0% | -1.703 | 4.0% | 0.43s |
-| **CCW-KM** | Misspecified | -0.0956 | -0.1024 | 0.1058 | 3.0% | 0.1076 | 0.0% | -2.394 | 0.0% | 0.35s |
-| **CCW-CPHM** | Correct | -0.0360 | -0.0815 | 0.0844 | 2.0% | 0.0852 | — | -1.021 | 35.0% | 0.23s |
-| **CCW-CPHM** | Misspecified | -0.0642 | -0.1257 | 0.1276 | 0.0% | 0.0897 | — | -1.821 | 1.0% | 0.22s |
-| **Time-Matched Cox** | Correct | -0.0255 | -0.0366 | 0.0439 | 67.0% | 0.0936 | — | -0.687 | 60.0% | 0.16s |
-| **Time-Matched Cox** | Misspecified | -0.0523 | -0.0775 | 0.0813 | 11.0% | 0.1016 | — | -1.434 | 9.0% | 0.15s |
-| **Time-Dependent Cox** | Correct | -0.0613 | -0.0241 | 0.0367 | 80.0% | 0.0930 | — | -1.360 | 6.0% | 0.11s |
-| **Time-Dependent Cox** | Misspecified | -0.0952 | -0.0915 | 0.0949 | 3.0% | 0.0900 | — | -2.368 | 0.0% | 0.10s |
-| **Landmark Cox** | Correct | -0.1353 | -0.0685 | 0.0744 | 61.0% | 0.1490 | — | — | — | 0.01s |
-| **Landmark Cox** | Misspecified | -0.1313 | -0.0881 | 0.0933 | 35.0% | 0.1523 | — | — | — | 0.00s |
-| **Naive Cox** | Correct | -0.0752 | -0.0704 | 0.0757 | 47.0% | 0.1360 | — | -1.728 | 14.0% | 0.01s |
-| **Naive Cox** | Misspecified | -0.0833 | -0.1142 | 0.1177 | 6.0% | 0.1399 | — | -2.122 | 5.0% | 0.00s |
+| **TTE-TMLE (GLM)** | GLM: Corr Q + Corr g | -0.0283 | -0.0398 | 0.0476 | 72.0% | 0.1073 | 89.0% | -0.740 | 67.0% | 1.41s |
+| **TTE-TMLE (GLM)** | GLM: Mis Q + Corr g | -0.0315 | -0.0399 | 0.0475 | 74.0% | 0.1114 | 91.0% | -0.813 | 68.0% | 1.19s |
+| **TTE-TMLE (GLM)** | GLM: Corr Q + Mis g | -0.0295 | -0.0403 | 0.0477 | 74.0% | 0.1105 | 91.0% | -0.766 | 67.0% | 1.19s |
+| **TTE-TMLE (GLM)** | GLM: Mis Q + Mis g | -0.0655 | -0.0796 | 0.0837 | 17.0% | 0.1139 | 35.0% | -1.685 | 8.0% | 1.15s |
+| **CCW-KM** | Correct | -0.0304 | -0.0464 | 0.0535 | 67.0% | 0.1121 | 74.0% | -0.847 | 68.0% | 0.65s |
+| **CCW-KM** | Misspecified | -0.0653 | -0.0792 | 0.0838 | 22.0% | 0.1135 | 13.0% | -1.691 | 8.0% | 0.55s |
+| **Time-Matched Cox** | Correct | -0.0255 | -0.0366 | 0.0439 | 70.0% | 0.0999 | — | -0.686 | 70.0% | 5.65s |
+| **Time-Matched Cox** | Misspecified | -0.0523 | -0.0775 | 0.0813 | 12.0% | 0.1050 | — | -1.434 | 12.0% | 4.95s |
 
 ![Scenario 6 Benchmark](figures/scenario_6_benchmark_100iter.png)
 
@@ -282,7 +229,7 @@ In addition to **Regime 1 (Corr Q + Corr g)** and **Regime 4 (Mis Q + Mis g)** s
 
 ### Scenario 7: Positivity Tail Depletion & "Empty-Cell" Support Bias
 * **Plain-Language Clinical Story:** Induces severe finite-sample tail sparsity on Scenario 2's non-linear DGP where extreme covariate strata frequently have zero surviving clones in one arm by Day 10 in finite samples ($N = 1,000$) ([`07_dgp_positivity_tail_depletion.R`](file:///Users/jacobtiegs/projects/tmle_tte/sim/dgp/07_dgp_positivity_tail_depletion.R)).
-* **The "Sneaky" Epidemiological Trap (Finite-Sample Empty Cells Despite Perfect Propensity Formulas):** Even when `CCW-KM [Corr]` is given the **100% exact propensity formula**, inverse-probability weights cannot reweight zero surviving clones ($0 \times w = 0$), causing `CCW-KM [Corr]` to fail (`Bias(30) = -0.0567`, `95% Cov = 43.0%`, `Band Cov = 5.0%`). Because `TTE-TMLE` and `TTE-TMLE (BART)` fit an outcome hazard surface $Q$ across the covariate space, they extrapolate smoothly across empty cells: `TTE-TMLE (GLM)` achieves `-0.0054` bias (`92.0%` cov) in Regime 1 and `-0.0041` (`96.0%` cov) in Regime 3, while `TTE-TMLE (BART)` (`-0.0132`, `92.0%` cov, `90.0%` band cov) and `TTE-TMLE (SuperLearner)` (`-0.0191`, `92.0%` cov, `86.0%` band cov) rescue inference nonparametrically!
+* **The "Sneaky" Epidemiological Trap (Finite-Sample Empty Cells Despite Perfect Propensity Formulas):** Even when `CCW-KM [Corr]` uses the exact propensity formula, inverse-probability weights cannot reweight zero surviving clones ($0 \times w = 0$), leaving residual tail bias (`Bias(30) = -0.0259`, `RMSE = 0.0375`, `Band Cov = 89.0%`; misspecified `CCW-KM [Mis]` drops to `28.0%` cov). Because `TTE-TMLE` and `TTE-TMLE (BART)` fit an outcome hazard surface $Q$ across the covariate space, they extrapolate smoothly across empty cells: `TTE-TMLE (GLM)` achieves `-0.0063` bias (`94.0%` cov, `99.0%` band cov) in Regime 1 and `-0.0027` (`97.0%` cov, `100.0%` band cov) in Regime 3, while `TTE-TMLE (BART)` (`-0.0132`, `92.0%` cov, `90.0%` band cov) and `TTE-TMLE (SuperLearner)` (`-0.0191`, `92.0%` cov, `86.0%` band cov) rescue inference nonparametrically!
 * **Oracle Ground Truth (`N = 200,000` CRN):** `RD(15) = +0.1284` | `RD(30) = +0.2564` | `RMSTD(30) = +3.777 days` | `Marginal HR(30) = 0.4703`.
 
 | Estimator | Regime / Spec | Bias(15) | Bias(30) | RMSE(30) | 95% Cov(30) | CI Width | Band Cov | RMSTD Bias | RMSTD Cov | Mean Time |
@@ -290,22 +237,14 @@ In addition to **Regime 1 (Corr Q + Corr g)** and **Regime 4 (Mis Q + Mis g)** s
 | **TTE-TMLE (BART)** | Non-Parametric | -0.0067 | -0.0132 | 0.0302 | 92.0% | 0.1035 | 90.0% | -0.174 | 89.0% | 4.83s |
 | **G-COMP (BART)** | Non-Parametric | -0.0135 | -0.0239 | 0.0351 | 74.0% | 0.0908 | 52.0% | -0.364 | 68.0% | 5.09s |
 | **TTE-TMLE (SuperLearner)** | Non-Parametric | -0.0134 | -0.0191 | 0.0329 | 92.0% | 0.1015 | 86.0% | -0.325 | 82.0% | 13.77s |
-| **TTE-TMLE (GLM)** | GLM: Corr Q + Corr g | -0.0041 | -0.0054 | 0.0265 | 92.0% | 0.1009 | 89.0% | -0.052 | 92.0% | 1.07s |
-| **TTE-TMLE (GLM)** | GLM: Mis Q + Corr g | -0.0176 | -0.0200 | 0.0329 | 93.0% | 0.1032 | 78.0% | -0.386 | 79.0% | 0.86s |
-| **TTE-TMLE (GLM)** | GLM: Corr Q + Mis g | -0.0040 | -0.0041 | 0.0253 | 96.0% | 0.1110 | 84.0% | -0.042 | 95.0% | 0.86s |
-| **TTE-TMLE (GLM)** | GLM: Mis Q + Mis g | -0.0458 | -0.0794 | 0.0846 | 19.0% | 0.1173 | 24.0% | -1.270 | 11.0% | 0.82s |
-| **CCW-KM** | Correct | -0.0493 | -0.0567 | 0.0621 | 43.0% | 0.1065 | 5.0% | -1.111 | 16.0% | 0.45s |
-| **CCW-KM** | Misspecified | -0.0731 | -0.0996 | 0.1034 | 6.0% | 0.1118 | 0.0% | -1.816 | 1.0% | 0.41s |
-| **CCW-CPHM** | Correct | +0.0047 | -0.0630 | 0.0664 | 15.0% | 0.0830 | — | -0.077 | 93.0% | 0.27s |
-| **CCW-CPHM** | Misspecified | -0.0331 | -0.1213 | 0.1236 | 0.0% | 0.0985 | — | -1.141 | 22.0% | 0.27s |
-| **Time-Matched Cox** | Correct | +0.0000 | -0.0090 | 0.0284 | 95.0% | 0.1030 | — | -0.047 | 92.0% | 0.11s |
-| **Time-Matched Cox** | Misspecified | -0.0380 | -0.0800 | 0.0851 | 18.0% | 0.1127 | — | -1.122 | 18.0% | 0.09s |
-| **Time-Dependent Cox** | Correct | -0.0112 | +0.0104 | 0.0310 | 86.0% | 0.0982 | — | -0.092 | 85.0% | 0.10s |
-| **Time-Dependent Cox** | Misspecified | -0.0479 | -0.0781 | 0.0831 | 15.0% | 0.0996 | — | -1.278 | 6.0% | 0.09s |
-| **Landmark Cox** | Correct | -0.0731 | -0.0375 | 0.0459 | 89.0% | 0.1317 | — | — | — | 0.01s |
-| **Landmark Cox** | Misspecified | -0.0794 | -0.0897 | 0.0949 | 27.0% | 0.1442 | — | — | — | 0.00s |
-| **Naive Cox** | Correct | -0.0253 | -0.0442 | 0.0514 | 78.0% | 0.1255 | — | -0.552 | 94.0% | 0.01s |
-| **Naive Cox** | Misspecified | -0.0597 | -0.1376 | 0.1410 | 3.0% | 0.1408 | — | -1.749 | 16.0% | 0.00s |
+| **TTE-TMLE (GLM)** | GLM: Corr Q + Corr g | -0.0046 | -0.0063 | 0.0278 | 94.0% | 0.1076 | 99.0% | -0.066 | 92.0% | 1.53s |
+| **TTE-TMLE (GLM)** | GLM: Mis Q + Corr g | -0.0062 | -0.0111 | 0.0293 | 95.0% | 0.1112 | 97.0% | -0.142 | 90.0% | 1.26s |
+| **TTE-TMLE (GLM)** | GLM: Corr Q + Mis g | -0.0027 | -0.0027 | 0.0260 | 97.0% | 0.1190 | 100.0% | -0.009 | 98.0% | 1.24s |
+| **TTE-TMLE (GLM)** | GLM: Mis Q + Mis g | -0.0482 | -0.0819 | 0.0870 | 23.0% | 0.1279 | 48.0% | -1.330 | 17.0% | 1.19s |
+| **CCW-KM** | Correct | -0.0160 | -0.0259 | 0.0375 | 91.0% | 0.1185 | 89.0% | -0.383 | 90.0% | 0.68s |
+| **CCW-KM** | Misspecified | -0.0489 | -0.0748 | 0.0808 | 28.0% | 0.1196 | 35.0% | -1.248 | 20.0% | 0.59s |
+| **Time-Matched Cox** | Correct | -0.0000 | -0.0090 | 0.0284 | 96.0% | 0.1132 | — | -0.048 | 97.0% | 4.56s |
+| **Time-Matched Cox** | Misspecified | -0.0381 | -0.0800 | 0.0851 | 21.0% | 0.1181 | — | -1.123 | 23.0% | 3.94s |
 
 ![Scenario 7 Benchmark](figures/scenario_7_benchmark_100iter.png)
 
@@ -313,7 +252,7 @@ In addition to **Regime 1 (Corr Q + Corr g)** and **Regime 4 (Mis Q + Mis g)** s
 
 ### Scenario 8: Depletion of Susceptibles & Survivor Collider Bias (Unmeasured Frailty)
 * **Plain-Language Clinical Story:** Adds an unmeasured multiplicative Gamma frailty $U$ ($\text{Var}(U) = 0.6$) to Scenario 2's non-linear DGP ([`08_dgp_depletion_of_susceptibles.R`](file:///Users/jacobtiegs/projects/tmle_tte/sim/dgp/08_dgp_depletion_of_susceptibles.R)). Because doctors cannot see $U$, it does not affect treatment assignment at baseline (not a confounder at $t=0$), but it strongly accelerates mortality.
-* **The "Sneaky" Epidemiological Trap (Built-In Selection Bias of Hazard Ratios):** Because the drug protects treated patients, high-frailty untreated patients die off rapidly in the first two weeks, leaving only "hardy" low-frailty survivors in the untreated risk set at later times. Conditional Cox models (`Time-Dependent Cox`, `CCW-CPHM`) suffer survivor depletion distortion (`95% Cov(30) = 78.0%` and `70.0%`), whereas prospective marginal survival estimators **`TTE-TMLE (BART)` (`Bias(30) = +0.0023`, `94.0%` cov, `94.0%` band cov)**, **`TTE-TMLE (SuperLearner)` (`Bias(30) = -0.0029`, `89.0%` cov, `92.0%` band cov)**, and **`TTE-TMLE (GLM)` (`Bias(30) = +0.0007` to `+0.0127`, `90%–91%` cov across Regimes 1–3)** remain completely unbiased!
+* **The "Sneaky" Epidemiological Trap (Built-In Selection Bias of Hazard Ratios):** Because the drug protects treated patients, high-frailty untreated patients die off rapidly in the first two weeks, leaving only "hardy" low-frailty survivors in the untreated risk set at later times. Conditional Cox HRs attenuate upward away from the baseline hazard ratio `0.35` due to unmeasured depletion of susceptibles (`0.3920` for `Time-Matched Cox [Corr]`, `0.4020` for `Time-Dependent Cox [Corr]`, and `0.3979` for `Landmark Cox [Corr]`; Section 5), whereas prospective marginal survival estimators **`TTE-TMLE (BART)` (`Bias(30) = +0.0023`, `94.0%` cov, `94.0%` band cov)**, **`TTE-TMLE (SuperLearner)` (`Bias(30) = -0.0029`, `89.0%` cov, `92.0%` band cov)**, **`TTE-TMLE (GLM)` (`Bias(30) = +0.0026` to `+0.0128`, `92%–95%` cov across Regimes 1–3)**, and **`CCW-KM [Corr]` (`-0.0016`, `93.0%` cov)** remain unbiased!
 * **Oracle Ground Truth (`N = 200,000` CRN):** `RD(15) = +0.1086` | `RD(30) = +0.2099` | `RMSTD(30) = +3.147 days` | `Marginal HR(30) = 0.5092`.
 
 | Estimator | Regime / Spec | Bias(15) | Bias(30) | RMSE(30) | 95% Cov(30) | CI Width | Band Cov | RMSTD Bias | RMSTD Cov | Mean Time |
@@ -321,30 +260,80 @@ In addition to **Regime 1 (Corr Q + Corr g)** and **Regime 4 (Mis Q + Mis g)** s
 | **TTE-TMLE (BART)** | Non-Parametric | -0.0044 | +0.0023 | 0.0286 | 94.0% | 0.1019 | 94.0% | -0.038 | 90.0% | 4.97s |
 | **G-COMP (BART)** | Non-Parametric | -0.0068 | -0.0009 | 0.0288 | 84.0% | 0.0885 | 60.0% | -0.104 | 84.0% | 5.29s |
 | **TTE-TMLE (SuperLearner)** | Non-Parametric | -0.0072 | -0.0029 | 0.0280 | 89.0% | 0.1003 | 92.0% | -0.113 | 88.0% | 16.57s |
-| **TTE-TMLE (GLM)** | GLM: Corr Q + Corr g | +0.0006 | +0.0102 | 0.0294 | 90.0% | 0.0992 | 91.0% | +0.117 | 86.0% | 1.11s |
-| **TTE-TMLE (GLM)** | GLM: Mis Q + Corr g | -0.0049 | +0.0007 | 0.0279 | 91.0% | 0.1008 | 95.0% | -0.042 | 90.0% | 0.87s |
-| **TTE-TMLE (GLM)** | GLM: Corr Q + Mis g | +0.0021 | +0.0127 | 0.0301 | 91.0% | 0.1025 | 87.0% | +0.159 | 87.0% | 0.88s |
-| **TTE-TMLE (GLM)** | GLM: Mis Q + Mis g | -0.0185 | -0.0247 | 0.0376 | 81.0% | 0.1040 | 77.0% | -0.449 | 73.0% | 0.82s |
-| **CCW-KM** | Correct | -0.0283 | -0.0287 | 0.0397 | 79.0% | 0.1039 | 45.0% | -0.616 | 60.0% | 0.46s |
-| **CCW-KM** | Misspecified | -0.0423 | -0.0505 | 0.0577 | 57.0% | 0.1042 | 12.0% | -1.000 | 23.0% | 0.41s |
-| **CCW-CPHM** | Correct | +0.0103 | -0.0308 | 0.0388 | 70.0% | 0.0825 | — | +0.190 | 88.0% | 0.27s |
-| **CCW-CPHM** | Misspecified | -0.0076 | -0.0588 | 0.0639 | 29.0% | 0.0862 | — | -0.313 | 82.0% | 0.27s |
-| **Time-Matched Cox** | Correct | +0.0023 | +0.0088 | 0.0294 | 86.0% | 0.0892 | — | +0.101 | 83.0% | 0.14s |
-| **Time-Matched Cox** | Misspecified | -0.0172 | -0.0264 | 0.0398 | 75.0% | 0.0926 | — | -0.440 | 73.0% | 0.13s |
-| **Time-Dependent Cox** | Correct | -0.0107 | +0.0112 | 0.0317 | 78.0% | 0.0833 | — | -0.092 | 78.0% | 0.10s |
-| **Time-Dependent Cox** | Misspecified | -0.0292 | -0.0336 | 0.0443 | 65.0% | 0.0832 | — | -0.690 | 41.0% | 0.09s |
-| **Landmark Cox** | Correct | -0.0602 | -0.0328 | 0.0423 | 87.0% | 0.1294 | — | — | — | 0.01s |
-| **Landmark Cox** | Misspecified | -0.0603 | -0.0453 | 0.0540 | 78.0% | 0.1338 | — | — | — | 0.00s |
-| **Naive Cox** | Correct | -0.0148 | -0.0349 | 0.0444 | 83.0% | 0.1247 | — | -0.314 | 95.0% | 0.01s |
-| **Naive Cox** | Misspecified | -0.0254 | -0.0674 | 0.0739 | 56.0% | 0.1328 | — | -0.702 | 79.0% | 0.00s |
+| **TTE-TMLE (GLM)** | GLM: Corr Q + Corr g | -0.0022 | +0.0063 | 0.0299 | 92.0% | 0.1119 | 100.0% | +0.044 | 95.0% | 1.55s |
+| **TTE-TMLE (GLM)** | GLM: Mis Q + Corr g | -0.0027 | +0.0026 | 0.0293 | 95.0% | 0.1140 | 100.0% | +0.008 | 95.0% | 1.29s |
+| **TTE-TMLE (GLM)** | GLM: Corr Q + Mis g | +0.0024 | +0.0128 | 0.0306 | 93.0% | 0.1079 | 100.0% | +0.166 | 94.0% | 1.26s |
+| **TTE-TMLE (GLM)** | GLM: Mis Q + Mis g | -0.0190 | -0.0257 | 0.0385 | 83.0% | 0.1098 | 91.0% | -0.464 | 78.0% | 1.20s |
+| **CCW-KM** | Correct | -0.0036 | -0.0016 | 0.0313 | 93.0% | 0.1173 | 93.0% | -0.053 | 93.0% | 0.71s |
+| **CCW-KM** | Misspecified | -0.0231 | -0.0320 | 0.0438 | 79.0% | 0.1094 | 74.0% | -0.564 | 74.0% | 0.58s |
+| **Time-Matched Cox** | Correct | +0.0023 | +0.0087 | 0.0294 | 93.0% | 0.1075 | — | +0.100 | 95.0% | 5.20s |
+| **Time-Matched Cox** | Misspecified | -0.0172 | -0.0264 | 0.0398 | 81.0% | 0.1074 | — | -0.441 | 76.0% | 4.51s |
 
 ![Scenario 8 Benchmark](figures/scenario_8_benchmark_100iter.png)
 
 ---
 
-## 5. Master Excel Workbook Architecture
+## 5. Companion Conditional Cox Hazard-Ratio Benchmarks (Option 1)
+
+Under Option 1, estimators whose Cox partial likelihood conditions on post-baseline survival (`Landmark Cox`, `time > 10`) or time-varying switch indicators without a target-trial survival model (`Time-Dependent Cox`) are **prohibited from generating artificial baseline $t = 0$ `RD(15)`, `RD(30)`, `RMSTD(30)`, or cumulative `Marginal HR(30)` values** (`NA` across baseline marginal panels). Instead, their native **conditional Cox hazard ratios (`exp(beta)`)** are summarized alongside `Time-Matched Cox`'s conditional HR (`exp(beta_match)`). Notice across Scenarios 2 and 8 how conditional HRs differ structurally from the cumulative 30-day `Marginal HR(30)` and attenuate upward under unmeasured frailty depletion (Scenario 8: conditional HRs rise from the underlying `0.35` hazard ratio toward `0.3920–0.4020`).
+
+| Scenario | Estimator | Spec | Cond HR Mean | Emp SD | Mean 95% CI Width | Baseline $t=0$ Marginal `RD`/`RMSTD` |
+| :--- | :--- | :--- | :---: | :---: | :---: | :---: |
+| Scenario 1 | **Time-Matched Cox** | Correct | 0.3429 | 0.0420 | 0.1770 | G-standardized |
+| Scenario 1 | **Time-Matched Cox** | Misspecified | 0.3831 | 0.0480 | 0.1954 | G-standardized |
+| Scenario 1 | **Time-Dependent Cox** | Correct | 0.3468 | 0.0438 | 0.1754 | N/A (HR-only) |
+| Scenario 1 | **Time-Dependent Cox** | Misspecified | 0.3856 | 0.0463 | 0.1920 | N/A (HR-only) |
+| Scenario 1 | **Landmark Cox** | Correct | 0.3404 | 0.0453 | 0.1868 | N/A (HR-only) |
+| Scenario 1 | **Landmark Cox** | Misspecified | 0.3826 | 0.0488 | 0.2055 | N/A (HR-only) |
+| Scenario 2 | **Time-Matched Cox** | Correct | 0.3604 | 0.0372 | 0.1684 | G-standardized |
+| Scenario 2 | **Time-Matched Cox** | Misspecified | 0.4610 | 0.0445 | 0.2013 | G-standardized |
+| Scenario 2 | **Time-Dependent Cox** | Correct | 0.3836 | 0.0422 | 0.1712 | N/A (HR-only) |
+| Scenario 2 | **Time-Dependent Cox** | Misspecified | 0.4635 | 0.0496 | 0.2014 | N/A (HR-only) |
+| Scenario 2 | **Landmark Cox** | Correct | 0.3527 | 0.0418 | 0.1855 | N/A (HR-only) |
+| Scenario 2 | **Landmark Cox** | Misspecified | 0.4674 | 0.0526 | 0.2251 | N/A (HR-only) |
+| Scenario 3 | **Time-Matched Cox** | Correct | 0.7179 | 0.0813 | 0.2950 | G-standardized |
+| Scenario 3 | **Time-Matched Cox** | Misspecified | 0.8798 | 0.0934 | 0.3484 | G-standardized |
+| Scenario 3 | **Time-Dependent Cox** | Correct | 0.7494 | 0.0698 | 0.2849 | N/A (HR-only) |
+| Scenario 3 | **Time-Dependent Cox** | Misspecified | 0.8922 | 0.0839 | 0.3308 | N/A (HR-only) |
+| Scenario 3 | **Landmark Cox** | Correct | 0.8691 | 0.0936 | 0.3715 | N/A (HR-only) |
+| Scenario 3 | **Landmark Cox** | Misspecified | 1.0665 | 0.1097 | 0.4329 | N/A (HR-only) |
+| Scenario 4 | **Time-Matched Cox** | Correct | 0.3438 | 0.0369 | 0.1428 | G-standardized |
+| Scenario 4 | **Time-Matched Cox** | Misspecified | 0.4357 | 0.0457 | 0.1719 | G-standardized |
+| Scenario 4 | **Time-Dependent Cox** | Correct | 0.3643 | 0.0337 | 0.1419 | N/A (HR-only) |
+| Scenario 4 | **Time-Dependent Cox** | Misspecified | 0.4391 | 0.0459 | 0.1680 | N/A (HR-only) |
+| Scenario 4 | **Landmark Cox** | Correct | 0.3343 | 0.0436 | 0.1567 | N/A (HR-only) |
+| Scenario 4 | **Landmark Cox** | Misspecified | 0.4406 | 0.0569 | 0.1912 | N/A (HR-only) |
+| Scenario 5 | **Time-Matched Cox** | Correct | 0.3543 | 0.0444 | 0.1801 | G-standardized |
+| Scenario 5 | **Time-Matched Cox** | Misspecified | 0.4829 | 0.0541 | 0.2260 | G-standardized |
+| Scenario 5 | **Time-Dependent Cox** | Correct | 0.3835 | 0.0417 | 0.1754 | N/A (HR-only) |
+| Scenario 5 | **Time-Dependent Cox** | Misspecified | 0.4881 | 0.0502 | 0.2153 | N/A (HR-only) |
+| Scenario 5 | **Landmark Cox** | Correct | 0.3445 | 0.0458 | 0.1952 | N/A (HR-only) |
+| Scenario 5 | **Landmark Cox** | Misspecified | 0.5035 | 0.0500 | 0.2469 | N/A (HR-only) |
+| Scenario 6 | **Time-Matched Cox** | Correct | 0.3757 | 0.0352 | 0.1466 | G-standardized |
+| Scenario 6 | **Time-Matched Cox** | Misspecified | 0.4676 | 0.0405 | 0.1746 | G-standardized |
+| Scenario 6 | **Time-Dependent Cox** | Correct | 0.3950 | 0.0363 | 0.1509 | N/A (HR-only) |
+| Scenario 6 | **Time-Dependent Cox** | Misspecified | 0.4811 | 0.0417 | 0.1794 | N/A (HR-only) |
+| Scenario 6 | **Landmark Cox** | Correct | 0.3922 | 0.0469 | 0.1862 | N/A (HR-only) |
+| Scenario 6 | **Landmark Cox** | Misspecified | 0.4825 | 0.0509 | 0.2171 | N/A (HR-only) |
+| Scenario 7 | **Time-Matched Cox** | Correct | 0.3669 | 0.0461 | 0.1909 | G-standardized |
+| Scenario 7 | **Time-Matched Cox** | Misspecified | 0.5220 | 0.0618 | 0.2490 | G-standardized |
+| Scenario 7 | **Time-Dependent Cox** | Correct | 0.3906 | 0.0432 | 0.1777 | N/A (HR-only) |
+| Scenario 7 | **Time-Dependent Cox** | Misspecified | 0.5263 | 0.0579 | 0.2292 | N/A (HR-only) |
+| Scenario 7 | **Landmark Cox** | Correct | 0.3555 | 0.0507 | 0.2034 | N/A (HR-only) |
+| Scenario 7 | **Landmark Cox** | Misspecified | 0.5478 | 0.0664 | 0.2658 | N/A (HR-only) |
+| Scenario 8 | **Time-Matched Cox** | Correct | 0.3920 | 0.0484 | 0.1948 | G-standardized |
+| Scenario 8 | **Time-Matched Cox** | Misspecified | 0.4743 | 0.0614 | 0.2217 | G-standardized |
+| Scenario 8 | **Time-Dependent Cox** | Correct | 0.4020 | 0.0484 | 0.1913 | N/A (HR-only) |
+| Scenario 8 | **Time-Dependent Cox** | Misspecified | 0.4743 | 0.0587 | 0.2201 | N/A (HR-only) |
+| Scenario 8 | **Landmark Cox** | Correct | 0.3979 | 0.0547 | 0.2212 | N/A (HR-only) |
+| Scenario 8 | **Landmark Cox** | Misspecified | 0.4859 | 0.0631 | 0.2519 | N/A (HR-only) |
+
+---
+
+## 6. Master Excel Workbook Architecture
 
 All simulation metrics have been exported to [`sim/simulation_results_100iter.xlsx`](file:///Users/jacobtiegs/projects/tmle_tte/sim/simulation_results_100iter.xlsx) via [`export_100iter_results_xlsx.py`](file:///Users/jacobtiegs/projects/tmle_tte/sim/export_100iter_results_xlsx.py):
-1. **`Monte Carlo Summary`**: Aggregated 152-row performance table across all 8 scenarios and 19 estimator/regime combinations (`RD(15)`, `RD(30)`, `RMSTD(30)`, `Marginal HR(30)`, `SE Ratio`, `Uniform Band Coverage`, `Pointwise Band Coverage`, and `Mean Band Width`).
-2. **`Runtime Benchmarks`**: Wall-clock execution time summaries (mean, SD, median, min, max seconds per dataset) across all 19 configurations.
-3. **`Scenario 1` through `Scenario 8` (8 Dedicated Sheets)**: Scenario-specific performance matrices including all four double-robustness regimes for `TTE-TMLE (GLM)`.
+1. **`Monte Carlo Summary`**: Aggregated 120-row performance table across all 8 scenarios and 15 Option-1 estimator/regime combinations (`RD(15)`, `RD(30)`, `RMSTD(30)`, `Marginal HR(30)`, `SE Ratio`, `Uniform Band Coverage`, `Pointwise Band Coverage`, and `Mean Band Width`, with `N/A` on invalid marginal Cox baselines).
+2. **`Conditional Cox HRs`**: Dedicated 48-row hazard-scale summary tab reporting native conditional Cox hazard ratios (`Mean`, `Emp SD`, `95% CI Width`) for `Landmark Cox`, `Time-Dependent Cox`, and `Time-Matched Cox`.
+3. **`Runtime Benchmarks`**: Wall-clock execution time summaries (mean, SD, median, min, max seconds per dataset) across all 15 configurations.
+4. **`Scenario 1` through `Scenario 8` (8 Dedicated Sheets)**: Scenario-specific performance matrices including all four double-robustness regimes for `TTE-TMLE (GLM)`.
