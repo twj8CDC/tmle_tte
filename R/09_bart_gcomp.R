@@ -441,9 +441,11 @@ fit_bart_pair <- function(data,
                           tx_strategy = c("conditional_complier", "empirical_complier", "natural_grace"),
                           align_grace_weights = TRUE,
                           max_weight = 10,
+                          targeting_method = c("pooled_glm", "one_step"),
                           seed = NULL) {
   if (!is.null(seed)) set.seed(seed)
   tx_strategy <- match.arg(tx_strategy)
+  targeting_method <- match.arg(targeting_method)
   if (!align_grace_weights && tx_strategy != "natural_grace") {
     tx_strategy <- "natural_grace"
   }
@@ -566,51 +568,100 @@ fit_bart_pair <- function(data,
   Q_init_0 <- colMeans(py_out$q_cf_draws[, seq_len(n_cf), drop = FALSE])
   Q_init_1 <- colMeans(py_out$q_cf_draws[, (n_cf + 1L):(2L * n_cf), drop = FALSE])
 
-  targ_res <- target_hazard(
-    panel_w = panel_w,
-    pred_Q_init = Q_init_train,
-    grace_period = grace_period
-  )
-  panel_fluc <- targ_res$panel_w
-  eps_ctrl <- targ_res$eps_ctrl
-  eps_treat_pre <- targ_res$eps_treat_pre
-  eps_treat_post <- targ_res$eps_treat_post
-
   Q0_logit_mat <- stats::qlogis(bound_precision(matrix(Q_init_0, nrow = n_patients, ncol = tau, byrow = TRUE)))
   Q1_logit_mat <- stats::qlogis(bound_precision(matrix(Q_init_1, nrow = n_patients, ncol = tau, byrow = TRUE)))
 
-  # Control arm fluctuated hazards & cumulative survival (n_patients x tau)
-  Q_star_ctrl <- stats::plogis(Q0_logit_mat + eps_ctrl * ipcw_bart$cf_H_ctrl)
-  S_mat_ctrl <- 1 - Q_star_ctrl
-  if (tau > 1L) {
-    for (tt in 2:tau) {
-      S_mat_ctrl[, tt] <- S_mat_ctrl[, tt - 1L] * S_mat_ctrl[, tt]
-    }
-  }
+  if (targeting_method == "one_step") {
+    targ_res <- target_hazard(
+      panel_w = panel_w,
+      pred_Q_init = Q_init_train,
+      grace_period = grace_period,
+      targeting_method = "one_step",
+      base_ord = base_ord,
+      strat = ipcw_bart$strat,
+      cf_w = ipcw_bart,
+      logit_ctrl_init = Q0_logit_mat,
+      logit_tr0_init = Q0_logit_mat,
+      logit_tr1_init = Q1_logit_mat,
+      tau = tau
+    )
+    panel_fluc <- targ_res$panel_w
+    eps_ctrl <- targ_res$eps_ctrl
+    eps_treat_pre <- targ_res$eps_treat_pre
+    eps_treat_post <- targ_res$eps_treat_post
 
-  # Treated arm: exact analytical expectation sum_k w_k(W_i) S_i^*(t | T_A = k, W_i)
-  eps_treat_vec <- ifelse(seq_len(tau) <= grace_period, eps_treat_pre, eps_treat_post)
-  eps_treat_mat <- matrix(eps_treat_vec, nrow = n_patients, ncol = tau, byrow = TRUE)
-  S_mat_treat <- matrix(0, nrow = n_patients, ncol = tau)
-  strat <- ipcw_bart$strat
-  for (idx in seq_along(strat$k_vals)) {
-    wk <- strat$w_mat[, idx]
-    if (!any(wk > 0)) next
-    k <- as.integer(strat$k_vals[idx])
-    Q_init_k <- Q0_logit_mat
-    if (k <= 1L) {
-      Q_init_k <- Q1_logit_mat
-    } else if (k <= tau) {
-      Q_init_k[, k:tau] <- Q1_logit_mat[, k:tau, drop = FALSE]
-    }
-    Q_star_k <- stats::plogis(Q_init_k + eps_treat_mat * ipcw_bart$cf_H_treat_list[[idx]])
-    S_k <- 1 - Q_star_k
+    Q_star_ctrl <- targ_res$Q_star_ctrl_mat
+    S_mat_ctrl <- 1 - Q_star_ctrl
     if (tau > 1L) {
       for (tt in 2:tau) {
-        S_k[, tt] <- S_k[, tt - 1L] * S_k[, tt]
+        S_mat_ctrl[, tt] <- S_mat_ctrl[, tt - 1L] * S_mat_ctrl[, tt]
       }
     }
-    S_mat_treat <- S_mat_treat + sweep(S_k, 1L, wk, "*")
+
+    S_mat_treat <- matrix(0, nrow = n_patients, ncol = tau)
+    strat <- ipcw_bart$strat
+    for (idx in seq_along(strat$k_vals)) {
+      wk <- strat$w_mat[, idx]
+      if (!any(wk > 0)) next
+      k <- as.integer(strat$k_vals[idx])
+      Q_star_k <- targ_res$Q_star_tr1_mat
+      if (k > 1L) {
+        pre_t <- seq_len(min(k - 1L, tau))
+        Q_star_k[, pre_t] <- targ_res$Q_star_tr0_mat[, pre_t, drop = FALSE]
+      }
+      S_k <- 1 - Q_star_k
+      if (tau > 1L) {
+        for (tt in 2:tau) {
+          S_k[, tt] <- S_k[, tt - 1L] * S_k[, tt]
+        }
+      }
+      S_mat_treat <- S_mat_treat + sweep(S_k, 1L, wk, "*")
+    }
+  } else {
+    targ_res <- target_hazard(
+      panel_w = panel_w,
+      pred_Q_init = Q_init_train,
+      grace_period = grace_period,
+      targeting_method = "pooled_glm"
+    )
+    panel_fluc <- targ_res$panel_w
+    eps_ctrl <- targ_res$eps_ctrl
+    eps_treat_pre <- targ_res$eps_treat_pre
+    eps_treat_post <- targ_res$eps_treat_post
+
+    # Control arm fluctuated hazards & cumulative survival (n_patients x tau)
+    Q_star_ctrl <- stats::plogis(Q0_logit_mat + eps_ctrl * ipcw_bart$cf_H_ctrl)
+    S_mat_ctrl <- 1 - Q_star_ctrl
+    if (tau > 1L) {
+      for (tt in 2:tau) {
+        S_mat_ctrl[, tt] <- S_mat_ctrl[, tt - 1L] * S_mat_ctrl[, tt]
+      }
+    }
+
+    # Treated arm: exact analytical expectation sum_k w_k(W_i) S_i^*(t | T_A = k, W_i)
+    eps_treat_vec <- ifelse(seq_len(tau) <= grace_period, eps_treat_pre, eps_treat_post)
+    eps_treat_mat <- matrix(eps_treat_vec, nrow = n_patients, ncol = tau, byrow = TRUE)
+    S_mat_treat <- matrix(0, nrow = n_patients, ncol = tau)
+    strat <- ipcw_bart$strat
+    for (idx in seq_along(strat$k_vals)) {
+      wk <- strat$w_mat[, idx]
+      if (!any(wk > 0)) next
+      k <- as.integer(strat$k_vals[idx])
+      Q_init_k <- Q0_logit_mat
+      if (k <= 1L) {
+        Q_init_k <- Q1_logit_mat
+      } else if (k <= tau) {
+        Q_init_k[, k:tau] <- Q1_logit_mat[, k:tau, drop = FALSE]
+      }
+      Q_star_k <- stats::plogis(Q_init_k + eps_treat_mat * ipcw_bart$cf_H_treat_list[[idx]])
+      S_k <- 1 - Q_star_k
+      if (tau > 1L) {
+        for (tt in 2:tau) {
+          S_k[, tt] <- S_k[, tt - 1L] * S_k[, tt]
+        }
+      }
+      S_mat_treat <- S_mat_treat + sweep(S_k, 1L, wk, "*")
+    }
   }
 
   mean_s0 <- colMeans(S_mat_ctrl)
@@ -654,6 +705,8 @@ fit_bart_pair <- function(data,
     crit_val_simul = inf_res$crit_val_simul,
     se_rmstd = inf_res$se_rmstd,
     m_fluc = targ_res$m_fluctuate,
+    targ_res = targ_res,
+    targeting_method = targeting_method,
     tx_strategy = ipcw_bart$tx_strategy,
     elapsed_sec = 0.5 * t_py_elapsed + as.numeric(proc.time()["elapsed"] - t0_tmle)
   )
@@ -853,7 +906,9 @@ fit_bart_tmle <- function(data,
                           tx_strategy = c("conditional_complier", "empirical_complier", "natural_grace"),
                           align_grace_weights = TRUE,
                           max_weight = 10,
+                          targeting_method = c("pooled_glm", "one_step"),
                           seed = NULL) {
+  targeting_method <- match.arg(targeting_method)
   pair_res <- fit_bart_pair(
     data = data,
     clones = clones,
@@ -870,6 +925,7 @@ fit_bart_tmle <- function(data,
     tx_strategy = tx_strategy,
     align_grace_weights = align_grace_weights,
     max_weight = max_weight,
+    targeting_method = targeting_method,
     seed = seed
   )
   pair_res$tmle

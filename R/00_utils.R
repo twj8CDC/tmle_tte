@@ -170,9 +170,12 @@ predict.SL.bart <- function(object, newdata, ...) {
 #' SuperLearner wrapper for 0th-Order Highly Adaptive Lasso (HAL) 1-Day Cumulative Step Basis
 #'
 #' @description Constructs a nonparametric 1-day resolution cumulative step-function basis
-#'   \eqn{\{I(t \ge k)\}_{k \ge 2}} interacted with treatment status \code{is_treated} and fits
-#'   an elastic-net penalized binomial regression via \code{glmnet}. Discovers arbitrary hazard
-#'   change-points or kinks at 1-day granularity without pre-specified time intervals.
+#'   \eqn{\{I(t \ge k)\}_{k \ge 2}} interacted with treatment status \code{is_treated}, a 3-knot
+#'   natural cubic spline expansion on continuous baseline covariates \eqn{W}, pairwise covariate
+#'   interactions, and fits an elastic-net/Lasso penalized binomial regression via \code{glmnet}.
+#'   When cluster identifiers \code{id} are provided, internal CV folds are grouped by patient
+#'   to prevent leakage of person-time records. Discovers arbitrary hazard change-points or kinks
+#'   at 1-day granularity without pre-specified time intervals.
 #'
 #' @param Y Outcome vector.
 #' @param X Predictor matrix or data frame.
@@ -180,11 +183,11 @@ predict.SL.bart <- function(object, newdata, ...) {
 #' @param family Error distribution and link function.
 #' @param obsWeights Observation weights.
 #' @param id Cluster ID.
-#' @param alpha Elastic-net mixing parameter (default 0.5).
+#' @param alpha Elastic-net mixing parameter (default 1.0 for pure L1 Lasso).
 #' @param nfolds Number of internal CV folds for glmnet (default 3).
 #' @param ... Additional arguments.
 #' @export
-SL.hal.time <- function(Y, X, newX, family, obsWeights, id, alpha = 0.5, nfolds = 3L, ...) {
+SL.hal.time <- function(Y, X, newX, family, obsWeights, id, alpha = 1.0, nfolds = 3L, ...) {
   has_t <- ("t" %in% names(X)) && (length(unique(X$t)) > 2L)
   if (has_t && requireNamespace("glmnet", quietly = TRUE)) {
     t_vals <- sort(unique(as.numeric(X$t)))[-1]
@@ -193,8 +196,40 @@ SL.hal.time <- function(Y, X, newX, family, obsWeights, id, alpha = 0.5, nfolds 
     colnames(step_train) <- colnames(step_test) <- paste0("t_ge_", t_vals)
     
     cov_vars <- setdiff(names(X), c("t", "t_sq", "is_treated", "post_grace"))
-    X_cov_train <- as.matrix(X[, cov_vars, drop = FALSE])
-    X_cov_test  <- as.matrix(newX[, cov_vars, drop = FALSE])
+    spline_fits <- list()
+    X_cov_train <- NULL
+    X_cov_test  <- NULL
+    
+    if (length(cov_vars) > 0L) {
+      cov_train_list <- list()
+      cov_test_list  <- list()
+      for (v in cov_vars) {
+        vals <- X[[v]]
+        if (is.numeric(vals) && length(unique(vals)) > 4L) {
+          ns_basis <- splines::ns(vals, df = 3L)
+          spline_fits[[v]] <- ns_basis
+          cov_train_list[[v]] <- as.matrix(ns_basis)
+          colnames(cov_train_list[[v]]) <- paste0(v, "_ns", 1:3)
+          cov_test_list[[v]] <- stats::predict(ns_basis, newX[[v]])
+          colnames(cov_test_list[[v]]) <- paste0(v, "_ns", 1:3)
+        } else {
+          cov_train_list[[v]] <- matrix(as.numeric(vals), ncol = 1, dimnames = list(NULL, v))
+          cov_test_list[[v]]  <- matrix(as.numeric(newX[[v]]), ncol = 1, dimnames = list(NULL, v))
+        }
+      }
+      
+      if (length(cov_vars) >= 2L) {
+        combos <- utils::combn(cov_vars, 2, simplify = FALSE)
+        for (cb in combos) {
+          col_nm <- paste0(cb[1], "_x_", cb[2])
+          cov_train_list[[col_nm]] <- matrix(as.numeric(X[[cb[1]]]) * as.numeric(X[[cb[2]]]), ncol = 1, dimnames = list(NULL, col_nm))
+          cov_test_list[[col_nm]]  <- matrix(as.numeric(newX[[cb[1]]]) * as.numeric(newX[[cb[2]]]), ncol = 1, dimnames = list(NULL, col_nm))
+        }
+      }
+      
+      X_cov_train <- do.call(cbind, cov_train_list)
+      X_cov_test  <- do.call(cbind, cov_test_list)
+    }
     
     has_trt <- ("is_treated" %in% names(X)) && (length(unique(X$is_treated)) > 1L)
     if (has_trt) {
@@ -203,23 +238,50 @@ SL.hal.time <- function(Y, X, newX, family, obsWeights, id, alpha = 0.5, nfolds 
       step_int_tr <- step_train * trt_tr
       step_int_te <- step_test * trt_te
       colnames(step_int_tr) <- colnames(step_int_te) <- paste0("trt_t_ge_", t_vals)
-      x_tr <- cbind(X_cov_train, is_treated = trt_tr, step_train, step_int_tr)
-      x_te <- cbind(X_cov_test,  is_treated = trt_te, step_test,  step_int_te)
+      if (!is.null(X_cov_train)) {
+        x_tr <- cbind(X_cov_train, is_treated = trt_tr, step_train, step_int_tr)
+        x_te <- cbind(X_cov_test,  is_treated = trt_te, step_test,  step_int_te)
+      } else {
+        x_tr <- cbind(is_treated = trt_tr, step_train, step_int_tr)
+        x_te <- cbind(is_treated = trt_te, step_test,  step_int_te)
+      }
     } else {
-      x_tr <- cbind(X_cov_train, step_train)
-      x_te <- cbind(X_cov_test,  step_test)
+      if (!is.null(X_cov_train)) {
+        x_tr <- cbind(X_cov_train, step_train)
+        x_te <- cbind(X_cov_test,  step_test)
+      } else {
+        x_tr <- step_train
+        x_te <- step_test
+      }
+    }
+    
+    foldid <- NULL
+    if (!missing(id) && !is.null(id) && length(id) == nrow(X)) {
+      u_ids <- unique(id)
+      if (length(u_ids) >= nfolds) {
+        id_fold_map <- stats::setNames(sample(rep(seq_len(nfolds), length.out = length(u_ids))), u_ids)
+        foldid <- id_fold_map[as.character(id)]
+      }
     }
     
     fit_cv <- tryCatch({
-      suppressWarnings(glmnet::cv.glmnet(
-        x = x_tr, y = Y, weights = obsWeights,
-        family = "binomial", alpha = alpha, nfolds = nfolds
-      ))
+      if (!is.null(foldid)) {
+        suppressWarnings(glmnet::cv.glmnet(
+          x = x_tr, y = Y, weights = obsWeights,
+          family = "binomial", alpha = alpha, foldid = foldid
+        ))
+      } else {
+        suppressWarnings(glmnet::cv.glmnet(
+          x = x_tr, y = Y, weights = obsWeights,
+          family = "binomial", alpha = alpha, nfolds = nfolds
+        ))
+      }
     }, error = function(e) NULL)
     
     if (!is.null(fit_cv)) {
       pred <- as.numeric(stats::predict(fit_cv, newx = x_te, s = "lambda.min", type = "response"))
-      fit <- list(object = fit_cv, t_vals = t_vals, cov_vars = cov_vars, has_trt = has_trt, has_t = TRUE)
+      fit <- list(object = fit_cv, t_vals = t_vals, cov_vars = cov_vars,
+                  spline_fits = spline_fits, has_trt = has_trt, has_t = TRUE)
       class(fit) <- "SL.hal.time"
       return(list(pred = pred, fit = fit))
     }
@@ -243,14 +305,43 @@ predict.SL.hal.time <- function(object, newdata, ...) {
     t_vals <- object$t_vals
     step_te <- vapply(t_vals, function(k) as.numeric(newdata$t >= k), numeric(nrow(newdata)))
     colnames(step_te) <- paste0("t_ge_", t_vals)
-    X_cov_te <- as.matrix(newdata[, object$cov_vars, drop = FALSE])
+    
+    X_cov_te <- NULL
+    if (length(object$cov_vars) > 0L) {
+      cov_test_list <- list()
+      for (v in object$cov_vars) {
+        if (v %in% names(object$spline_fits)) {
+          cov_test_list[[v]] <- stats::predict(object$spline_fits[[v]], newdata[[v]])
+          colnames(cov_test_list[[v]]) <- paste0(v, "_ns", 1:3)
+        } else {
+          cov_test_list[[v]] <- matrix(as.numeric(newdata[[v]]), ncol = 1, dimnames = list(NULL, v))
+        }
+      }
+      if (length(object$cov_vars) >= 2L) {
+        combos <- utils::combn(object$cov_vars, 2, simplify = FALSE)
+        for (cb in combos) {
+          col_nm <- paste0(cb[1], "_x_", cb[2])
+          cov_test_list[[col_nm]] <- matrix(as.numeric(newdata[[cb[1]]]) * as.numeric(newdata[[cb[2]]]), ncol = 1, dimnames = list(NULL, col_nm))
+        }
+      }
+      X_cov_te <- do.call(cbind, cov_test_list)
+    }
+    
     if (isTRUE(object$has_trt)) {
       trt_te <- as.numeric(newdata$is_treated)
       step_int_te <- step_te * trt_te
       colnames(step_int_te) <- paste0("trt_t_ge_", t_vals)
-      x_te <- cbind(X_cov_te, is_treated = trt_te, step_te, step_int_te)
+      if (!is.null(X_cov_te)) {
+        x_te <- cbind(X_cov_te, is_treated = trt_te, step_te, step_int_te)
+      } else {
+        x_te <- cbind(is_treated = trt_te, step_te, step_int_te)
+      }
     } else {
-      x_te <- cbind(X_cov_te, step_te)
+      if (!is.null(X_cov_te)) {
+        x_te <- cbind(X_cov_te, step_te)
+      } else {
+        x_te <- step_te
+      }
     }
     return(as.numeric(stats::predict(object$object, newx = x_te, s = "lambda.min", type = "response")))
   } else {

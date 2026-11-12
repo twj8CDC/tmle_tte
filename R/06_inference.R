@@ -49,15 +49,21 @@ compute_eic_inference <- function(panel_w,
   
   # Use unstabilized IPCW weights for semiparametrically efficient score scaling if available
   w_eic <- if ("w_unstab_trim" %in% names(panel_w)) panel_w$w_unstab_trim else panel_w$w_trim
+
+  if (!("Q_star_hazard" %in% names(panel_w))) {
+    panel_w <- panel_w %>%
+      dplyr::mutate(
+        Q_star_hazard = stats::plogis(Q_init_logit + eps_ctrl * H_ctrl + 
+                                        eps_treat_pre * H_treat_pre + 
+                                        eps_treat_post * H_treat_post)
+      )
+  }
   
   panel_w <- panel_w %>%
     dplyr::mutate(w_eic = w_eic) %>%
     dplyr::left_join(cf_surv_prev, by = c("id", "arm", "t")) %>%
     dplyr::mutate(
       S_prev = tidyr::replace_na(S_prev, 1),
-      Q_star_hazard = stats::plogis(Q_init_logit + eps_ctrl * H_ctrl + 
-                                      eps_treat_pre * H_treat_pre + 
-                                      eps_treat_post * H_treat_post),
       D_martingale_step = w_eic * (event_cc_day - Q_star_hazard) / pmax(S_prev * (1 - Q_star_hazard), 1e-4)
     ) %>%
     dplyr::arrange(clone_id, t) %>%

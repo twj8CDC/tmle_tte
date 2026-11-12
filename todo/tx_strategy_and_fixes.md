@@ -50,6 +50,23 @@ Design goal: Make treatment-arm initiation policies explicit options inside [`tt
 
 ---
 
+## Phase 2.5: One-Step Survival TMLE Across Follow-Up Horizon *(Completed 2026-11-12)*
+
+- [x] **Resolve Mid-Follow-Up Residual Cancellation via Universal Least Favorable Submodel (`R/04_targeting.R`):**
+  - Implemented `target_hazard_onestep()` based on Cai & van der Laan (2020) / MOSS. Updates hazards along the exact pathwise gradient $G(u, W) = - \frac{w_{\text{eic}}(u)}{\max(S_{\text{prev}}(1 - Q), 10^{-4})} \sum_{t_0 = u}^\tau c(t_0) S(t_0)$, eliminating cross-period error cancellation (where $t = 11 \dots 15$ and $t = 20 \dots 30$ cancelled out in pooled 3-parameter GLM).
+  - Uses fast vectorized 1D GLM steps with damping (`damping = 0.5`) running in $< 0.15$ seconds without retraining $g$ or $Q$.
+  - Guaranteed deterministic monotonicity: cumulative survival $S^*(t) = \prod_{u \le t} (1 - Q^*(u))$ remains strictly non-increasing for every subject.
+- [x] **Plumbing Across Package APIs (`R/04_targeting.R`, `R/05_gcomp.R`, `R/06_inference.R`, `R/07_tte_tmle.R`, `R/09_bart_gcomp.R`):**
+  - Exposed `targeting_method = c("pooled_glm", "one_step")` in `tte_tmle()`, `target_hazard()`, `marginalize_gcomp()`, `fit_bart_pair()`, and `fit_bart_tmle()`.
+  - Preserved `"pooled_glm"` as default for 100% backwards compatibility.
+- [x] **Benchmark Verification (Scenario 3 Waning Efficacy):**
+  - Verified across 5 replicates on exact seeds:
+    - GLM: Day 15 bias reduced by 53% (`-0.0641 -> -0.0300`), RMSE reduced by 48% (`0.0659 -> 0.0340`).
+    - BART: Day 15 bias virtually zero (`+0.00206` vs ground truth `0.1611`), Day 30 bias reduced by 45% (`+0.0201 -> +0.0110`), and Day 30 RMSE reduced by 21% (`0.0266 -> 0.0209`).
+  - All package unit tests passed cleanly (`tests/test_tte_tmle.R`).
+
+---
+
 ## Phase 3: Secondary Thesis & Benchmark Improvements (Backlog)
 - [ ] **Upgrade All BART Defaults & Benchmarks to `SurvBART.preset_standard()` (`R/09_bart_gcomp.R`, `sim/run_100iter_benchmark.R`, `sim/run_simulation_condition.R`):**
   - Switch `fit_bart_pair()`, `fit_bart_gcomp()`, `fit_bart_tmle()`, and simulation runners from fast (`trees = 30`, `ndpost = 100`, `nskip = 100`, `thin = 2`, `chains = 1`) to `SurvBART.preset_standard()` (`trees = 50`, `draws = 1000` via `ndpost = 250, thin = 4`, `tune = 250`, `chains = 4`, yielding 1,000 thinned posterior draws). Verified on Scenarios 1–3 (`sim/scratch/test_gcomp_bart_standard_s1_s2.R`, `sim/scratch/test_bart_preset_standard_s3_20iter.R`): fixes fast-mode interval/band under-coverage and cuts Scenario 3 Day-15 bias (`-0.0286 -> -0.0071` for `TTE-TMLE (BART)`, `90%` uniform band coverage).

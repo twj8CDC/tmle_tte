@@ -245,5 +245,52 @@ for (st in strategies) {
   stopifnot(max(abs(rowSums(ipcw_st$strat$w_mat) - 1)) < 1e-12)
 }
 
+cat("\nChecking One-Step Survival TMLE (Universal Least Favorable Submodel)...\n")
+fit_os_glm <- tte_tmle(
+  data = test_data,
+  grace_period = 10,
+  tau = 30,
+  covars = c("x1"),
+  targeting_method = "one_step",
+  n_boot = 500,
+  seed = 123
+)
+stopifnot(
+  identical(fit_os_glm$params$targeting_method, "one_step"),
+  all(is.finite(fit_os_glm$res_tmle$rd)),
+  all(is.finite(fit_os_glm$res_tmle$se_RD)),
+  fit_os_glm$crit_val_simul >= fit_os_glm$crit_val_pointwise,
+  all(diff(fit_os_glm$res_tmle$control_no_tx) <= 1e-10),
+  all(diff(fit_os_glm$res_tmle$treat_tx) <= 1e-10)
+)
+cat("One-Step GLM TMLE Day 30 RD:", fit_os_glm$res_tmle$rd[30], "| Simul Band Critical Val:", fit_os_glm$crit_val_simul, "\n")
+cat("SUCCESS: One-Step GLM TMLE execution, finite EIC inference, and monotone survival curves verified.\n")
+
+cat("\nChecking One-Step Survival TMLE with BART...\n")
+fit_os_bart <- fit_bart_tmle(
+  data = prep_std,
+  clones = clones_std,
+  covars = "x1",
+  grace_period = 10,
+  tau = 30,
+  ntree = 20,
+  ndpost = 50,
+  nskip = 50,
+  thin = 2,
+  n_boot = 200,
+  targeting_method = "one_step",
+  seed = 77
+)
+stopifnot(
+  identical(fit_os_bart$targeting_method, "one_step"),
+  all(is.finite(fit_os_bart$results$rd)),
+  all(is.finite(fit_os_bart$results$se_RD)),
+  fit_os_bart$crit_val_simul >= 1.95,
+  all(diff(fit_os_bart$results$control_no_tx) <= 1e-10),
+  all(diff(fit_os_bart$results$treat_tx) <= 1e-10)
+)
+cat("One-Step BART TMLE Day 30 RD:", fit_os_bart$results$rd[30], "| Simul Band Critical Val:", fit_os_bart$crit_val_simul, "\n")
+cat("SUCCESS: One-Step BART TMLE execution and inference verified.\n")
+
 cat("\nALL PACKAGE MODULE CHECKS PASSED!\n")
 

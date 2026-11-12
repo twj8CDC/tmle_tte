@@ -20,6 +20,7 @@
 #' @param n_boot Number of multiplier bootstrap iterations for simultaneous confidence bands (default 10,000).
 #' @param alpha Significance level for intervals and bands (default 0.05).
 #' @param pure_gcomp Logical. If \code{TRUE}, evaluates pure counterfactual G-computation without the TMLE targeting update.
+#' @param targeting_method Targeting algorithm: \code{"pooled_glm"} (default) or \code{"one_step"}.
 #' @param align_grace_weights Deprecated compatibility flag (mapped to \code{"natural_grace"} if \code{FALSE}).
 #' @param tx_strategy Treatment-arm initiation policy during the grace period:
 #'   \code{"conditional_complier"} (default), \code{"empirical_complier"}, or \code{"natural_grace"}.
@@ -57,6 +58,7 @@ tte_tmle <- function(data,
                      n_boot = 10000,
                      alpha = 0.05,
                      pure_gcomp = FALSE,
+                     targeting_method = c("pooled_glm", "one_step"),
                      align_grace_weights = TRUE,
                      tx_strategy = c("conditional_complier", "empirical_complier", "natural_grace"),
                      max_weight = 10,
@@ -66,6 +68,7 @@ tte_tmle <- function(data,
                      event_col = "event",
                      tx_col = "tx_obs",
                      tx_time_col = "tx_time_obs") {
+  targeting_method <- match.arg(targeting_method)
   if (missing(tx_strategy) && !isTRUE(align_grace_weights)) {
     tx_strategy <- "natural_grace"
   } else {
@@ -117,7 +120,7 @@ tte_tmle <- function(data,
     sl_lib = sl_lib
   )
   
-  # Step 4: TMLE Fluctuation / Targeting Step
+  # Step 4 & 5: TMLE Targeting Step and G-Computation Marginalization
   if (pure_gcomp) {
     panel_w <- panel_w %>%
       dplyr::mutate(
@@ -130,42 +133,142 @@ tte_tmle <- function(data,
     eps_ctrl <- 0
     eps_treat_pre <- 0
     eps_treat_post <- 0
-    targ_res <- list(panel_w = panel_w, eps_ctrl = 0, eps_treat_pre = 0, eps_treat_post = 0)
-  } else {
+    targ_res <- list(panel_w = panel_w, eps_ctrl = 0, eps_treat_pre = 0, eps_treat_post = 0, targeting_method = "none")
+
+    gcomp_res <- marginalize_gcomp(
+      data = data_clean,
+      clones = clones,
+      m_Q_ctrl = q_res$m_Q_ctrl,
+      m_Q_treat = q_res$m_Q_treat,
+      m_denom_ctrl = ipcw_res$m_denom_ctrl,
+      m_denom_treat = ipcw_res$m_denom_treat,
+      m_num_ctrl = ipcw_res$m_num_ctrl,
+      m_num_treat = ipcw_res$m_num_treat,
+      eps_ctrl = 0,
+      eps_treat_pre = 0,
+      eps_treat_post = 0,
+      grace_period = grace_period,
+      tau = tau,
+      covars = covars,
+      q_lim = ipcw_res$q_lim,
+      use_sl = use_sl,
+      do_targeting = FALSE,
+      grace_surv = ipcw_res$grace_surv,
+      tx_strategy = tx_strategy,
+      p_star = ipcw_res$p_star,
+      align_grace_weights = align_grace_weights
+    )
+  } else if (targeting_method == "one_step") {
+    # 1. Base untargeted prediction surfaces & strategy weights
+    base_gcomp <- marginalize_gcomp(
+      data = data_clean,
+      clones = clones,
+      m_Q_ctrl = q_res$m_Q_ctrl,
+      m_Q_treat = q_res$m_Q_treat,
+      m_denom_ctrl = ipcw_res$m_denom_ctrl,
+      m_denom_treat = ipcw_res$m_denom_treat,
+      m_num_ctrl = ipcw_res$m_num_ctrl,
+      m_num_treat = ipcw_res$m_num_treat,
+      eps_ctrl = 0,
+      eps_treat_pre = 0,
+      eps_treat_post = 0,
+      grace_period = grace_period,
+      tau = tau,
+      covars = covars,
+      q_lim = ipcw_res$q_lim,
+      use_sl = use_sl,
+      do_targeting = FALSE,
+      grace_surv = ipcw_res$grace_surv,
+      tx_strategy = tx_strategy,
+      p_star = ipcw_res$p_star,
+      align_grace_weights = align_grace_weights
+    )
+
+    # 2. Universal One-Step Survival TMLE targeting
     targ_res <- target_hazard(
       panel_w = panel_w,
       pred_Q_init = q_res$pred_Q_init,
-      grace_period = grace_period
+      grace_period = grace_period,
+      targeting_method = "one_step",
+      base_ord = base_gcomp$base_ord,
+      strat = base_gcomp$strat,
+      cf_w = base_gcomp$cf_w,
+      logit_ctrl_init = base_gcomp$logit_ctrl_mat,
+      logit_tr0_init = base_gcomp$logit_tr0_mat,
+      logit_tr1_init = base_gcomp$logit_tr1_mat,
+      tau = tau
     )
     eps_ctrl <- targ_res$eps_ctrl
     eps_treat_pre <- targ_res$eps_treat_pre
     eps_treat_post <- targ_res$eps_treat_post
+
+    # 3. Final targeted marginalization using pre-targeted hazard matrices
+    gcomp_res <- marginalize_gcomp(
+      data = data_clean,
+      clones = clones,
+      m_Q_ctrl = q_res$m_Q_ctrl,
+      m_Q_treat = q_res$m_Q_treat,
+      m_denom_ctrl = ipcw_res$m_denom_ctrl,
+      m_denom_treat = ipcw_res$m_denom_treat,
+      m_num_ctrl = ipcw_res$m_num_ctrl,
+      m_num_treat = ipcw_res$m_num_treat,
+      eps_ctrl = 0,
+      eps_treat_pre = 0,
+      eps_treat_post = 0,
+      grace_period = grace_period,
+      tau = tau,
+      covars = covars,
+      q_lim = ipcw_res$q_lim,
+      use_sl = use_sl,
+      do_targeting = TRUE,
+      grace_surv = ipcw_res$grace_surv,
+      tx_strategy = tx_strategy,
+      p_star = ipcw_res$p_star,
+      align_grace_weights = align_grace_weights,
+      targeting_method = "one_step",
+      targ_res = targ_res,
+      logit_ctrl_mat = base_gcomp$logit_ctrl_mat,
+      logit_tr0_mat = base_gcomp$logit_tr0_mat,
+      logit_tr1_mat = base_gcomp$logit_tr1_mat,
+      strat = base_gcomp$strat,
+      cf_w = base_gcomp$cf_w
+    )
+  } else {
+    targ_res <- target_hazard(
+      panel_w = panel_w,
+      pred_Q_init = q_res$pred_Q_init,
+      grace_period = grace_period,
+      targeting_method = "pooled_glm"
+    )
+    eps_ctrl <- targ_res$eps_ctrl
+    eps_treat_pre <- targ_res$eps_treat_pre
+    eps_treat_post <- targ_res$eps_treat_post
+
+    gcomp_res <- marginalize_gcomp(
+      data = data_clean,
+      clones = clones,
+      m_Q_ctrl = q_res$m_Q_ctrl,
+      m_Q_treat = q_res$m_Q_treat,
+      m_denom_ctrl = ipcw_res$m_denom_ctrl,
+      m_denom_treat = ipcw_res$m_denom_treat,
+      m_num_ctrl = ipcw_res$m_num_ctrl,
+      m_num_treat = ipcw_res$m_num_treat,
+      eps_ctrl = eps_ctrl,
+      eps_treat_pre = eps_treat_pre,
+      eps_treat_post = eps_treat_post,
+      grace_period = grace_period,
+      tau = tau,
+      covars = covars,
+      q_lim = ipcw_res$q_lim,
+      use_sl = use_sl,
+      do_targeting = TRUE,
+      grace_surv = ipcw_res$grace_surv,
+      tx_strategy = tx_strategy,
+      p_star = ipcw_res$p_star,
+      align_grace_weights = align_grace_weights,
+      targeting_method = "pooled_glm"
+    )
   }
-  
-  # Step 5: Counterfactual G-Computation Marginalization
-  gcomp_res <- marginalize_gcomp(
-    data = data_clean,
-    clones = clones,
-    m_Q_ctrl = q_res$m_Q_ctrl,
-    m_Q_treat = q_res$m_Q_treat,
-    m_denom_ctrl = ipcw_res$m_denom_ctrl,
-    m_denom_treat = ipcw_res$m_denom_treat,
-    m_num_ctrl = ipcw_res$m_num_ctrl,
-    m_num_treat = ipcw_res$m_num_treat,
-    eps_ctrl = eps_ctrl,
-    eps_treat_pre = eps_treat_pre,
-    eps_treat_post = eps_treat_post,
-    grace_period = grace_period,
-    tau = tau,
-    covars = covars,
-    q_lim = ipcw_res$q_lim,
-    use_sl = use_sl,
-    do_targeting = !pure_gcomp,
-    grace_surv = ipcw_res$grace_surv,
-    tx_strategy = tx_strategy,
-    p_star = ipcw_res$p_star,
-    align_grace_weights = align_grace_weights
-  )
   
   # Step 6: Empirical Influence Curve & Multiplier Bootstrap Inference
   inf_res <- compute_eic_inference(
@@ -205,12 +308,15 @@ tte_tmle <- function(data,
     hr_summary = inf_res$hr_summary,
     data = panel_w,
     panel_w = panel_w,
+    cf_data = gcomp_res$cf_data,
+    targ_res = targ_res,
     params = list(
       grace_period = grace_period,
       tau = tau,
       alpha = alpha,
       use_sl = use_sl,
       pure_gcomp = pure_gcomp,
+      targeting_method = targeting_method,
       tx_strategy = tx_strategy
     )
   )
@@ -230,7 +336,14 @@ print.tte_tmle <- function(x, ...) {
   cat("--------------------------------------------------------\n")
   cat("Follow-up Horizon (tau):", x$params$tau, "\n")
   cat("Grace Period:", x$params$grace_period, "\n")
-  cat("Targeting Mode:", if (x$params$pure_gcomp) "Pure G-computation (Untargeted)" else "TMLE (Targeted)", "\n")
+  targ_desc <- if (isTRUE(x$params$pure_gcomp)) {
+    "Pure G-computation (Untargeted)"
+  } else if (identical(x$params$targeting_method, "one_step")) {
+    "TMLE (One-Step Hazard Submodel)"
+  } else {
+    "TMLE (Targeted - Pooled GLM)"
+  }
+  cat("Targeting Mode:", targ_desc, "\n")
   cat("Multiplier Bootstrap Critical Value (95% Band):", round(x$crit_val_simul, 3), "\n\n")
   
   times_to_show <- c(min(x$params$grace_period, x$params$tau), 
