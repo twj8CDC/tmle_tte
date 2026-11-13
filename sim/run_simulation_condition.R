@@ -78,6 +78,8 @@ get_scenario_spec <- function(scenario_num, n = 1000, tau = 30, grace_period = 1
     df_raw <- generate_scenario4_data(n = n, tau = tau, grace_period = grace_period, seed = seed)
     truth <- if (!is.null(truth_precomp)) truth_precomp else compute_scenario4_truth(tau = tau, grace_period = grace_period)
     covars_all <- c("w1", "w2", "w_prog")
+    p_covars <- covars_all
+    q_covars <- covars_all
     p_form_corr <- paste(nl_w12, "+ w_prog")
     p_form_mis  <- "w1 + w2 + w_prog"
     q_form_corr <- paste(nl_w12, "+ I(exp(0.55 * w_prog)) + I(w_prog^2)")
@@ -86,42 +88,45 @@ get_scenario_spec <- function(scenario_num, n = 1000, tau = 30, grace_period = 1
     df_raw <- generate_scenario5_data(n = n, tau = tau, grace_period = grace_period, seed = seed)
     truth <- if (!is.null(truth_precomp)) truth_precomp else compute_scenario5_truth(tau = tau, grace_period = grace_period)
     covars_all <- c("w1", "w2")
+    p_covars <- covars_all
+    q_covars <- covars_all
     p_form_corr <- nl_w12
     p_form_mis  <- lin_w12
     q_form_corr <- nl_w12
     q_form_mis  <- lin_w12
   } else if (scenario_num == 6) {
-    df_raw <- generate_scenario6_data(n = n, tau = tau, grace_period = grace_period, seed = seed)
-    truth <- if (!is.null(truth_precomp)) truth_precomp else compute_scenario6_truth(tau = tau, grace_period = grace_period)
+    df_raw <- generate_scenario8_data(n = n, tau = tau, grace_period = grace_period, seed = seed)
+    truth <- if (!is.null(truth_precomp)) truth_precomp else compute_scenario8_truth(tau = tau, grace_period = grace_period)
     covars_all <- c("w1", "w2")
+    p_covars <- covars_all
+    q_covars <- covars_all
     p_form_corr <- nl_w12
     p_form_mis  <- lin_w12
     q_form_corr <- nl_w12
     q_form_mis  <- lin_w12
   } else if (scenario_num == 7) {
-    df_raw <- generate_scenario7_data(n = n, tau = tau, grace_period = grace_period, seed = seed)
-    truth <- if (!is.null(truth_precomp)) truth_precomp else compute_scenario7_truth(tau = tau, grace_period = grace_period)
-    covars_all <- c("w1", "w2")
-    p_form_corr <- nl_w12
-    p_form_mis  <- lin_w12
-    q_form_corr <- nl_w12
-    q_form_mis  <- lin_w12
-  } else if (scenario_num == 8) {
-    df_raw <- generate_scenario8_data(n = n, tau = tau, grace_period = grace_period, seed = seed)
-    truth <- if (!is.null(truth_precomp)) truth_precomp else compute_scenario8_truth(tau = tau, grace_period = grace_period)
-    covars_all <- c("w1", "w2")
-    p_form_corr <- nl_w12
-    p_form_mis  <- lin_w12
+    df_raw <- generate_scenario6_data(n = n, tau = tau, grace_period = grace_period, seed = seed)
+    truth <- if (!is.null(truth_precomp)) truth_precomp else compute_scenario6_truth(tau = tau, grace_period = grace_period)
+    covars_all <- c("w1", "w2", "l_med")
+    p_covars <- c("w1", "w2", "l_med")
+    q_covars <- c("w1", "w2")
+    p_form_corr <- paste(nl_w12, "+ l_med")
+    p_form_mis  <- paste(lin_w12, "+ l_med")
     q_form_corr <- nl_w12
     q_form_mis  <- lin_w12
   } else {
     stop("Unsupported scenario_num: ", scenario_num)
   }
 
+  if (!exists("p_covars", inherits = FALSE)) p_covars <- covars_all
+  if (!exists("q_covars", inherits = FALSE)) q_covars <- covars_all
+
   list(
     df_raw = df_raw,
     truth = truth,
     covars_all = covars_all,
+    p_covars = p_covars,
+    q_covars = q_covars,
     p_form_corr = p_form_corr,
     p_form_mis = p_form_mis,
     q_form_corr = q_form_corr,
@@ -410,9 +415,12 @@ run_simulation_dataset <- function(scenario_num = 1,
         grace_period = grace_period,
         tau = tau,
         covars = covars_all,
+        p_covars = spec$p_covars,
+        q_covars = spec$q_covars,
         p_form = gr$pf,
         q_form = gr$qf,
         use_sl = FALSE,
+        targeting_method = "one_step",
         n_boot = 2000,
         seed = seed
       )
@@ -446,6 +454,8 @@ run_simulation_dataset <- function(scenario_num = 1,
       data = df_std,
       clones = clones,
       covars = covars_all,
+      p_covars = spec$p_covars,
+      q_covars = spec$q_covars,
       grace_period = grace_period,
       tau = tau,
       ntree = bart_trees,
@@ -453,6 +463,7 @@ run_simulation_dataset <- function(scenario_num = 1,
       nskip = bart_nskip,
       thin = bart_thin,
       chains = bart_chains,
+      targeting_method = "one_step",
       n_boot = 2000,
       seed = seed
     )
@@ -505,9 +516,12 @@ run_simulation_dataset <- function(scenario_num = 1,
       grace_period = grace_period,
       tau = tau,
       covars = covars_all,
+      p_covars = spec$p_covars,
+      q_covars = spec$q_covars,
       use_sl = TRUE,
       sl_lib = c("SL.mean", "SL.glm.time.int", "SL.hal.time", "SL.earth.int"),
       trim_quantile = c(0.001, 0.999),
+      targeting_method = "one_step",
       n_boot = 2000,
       seed = seed
     )

@@ -185,7 +185,7 @@ compute_scenario4_truth <- function(n_oracle = 200000,
   gate <- ifelse(w1 > 3.8 & w2 == 1L, 1.0, 0.0)
 
   lin_pred_0 <- -0.55 + 0.35 * exp(0.70 * w1_std) + 0.25 * (w1_std^2) + 0.50 * w2 + 0.45 * gate +
-    0.55 * exp(0.55 * w_prog) + 0.25 * (w_prog^2)
+    1.80 * (exp(0.55 * w_prog) - 1.16) + 0.40 * (w_prog^2 - 1)
   scale_0 <- base_scale * exp(-lin_pred_0 / shape)
   indiv_hr <- hr_target * exp(0.15 * w1_std)
   scale_t <- scale_0 * (indiv_hr)^(-1 / shape)

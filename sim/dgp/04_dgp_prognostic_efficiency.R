@@ -36,8 +36,8 @@ generate_scenario4_data <- function(n = 1000,
   gate <- ifelse(w1 > 3.8 & w2 == 1L, 1.0, 0.0)
 
   # 2. Treatment Initiation Propensity (Depends on w1, w2, independent of w_prog)
-  logit_p_tx <- -0.75 + 0.45 * exp(0.70 * w1_std) + 0.30 * (w1_std^2) + 0.40 * w2 + 1.25 * gate
-  prob_tx <- pmin(pmax(stats::plogis(logit_p_tx), 0.04), 0.96)
+  logit_p_tx <- -0.85 + 0.65 * exp(0.70 * w1_std) + 0.45 * (w1_std^2) + 0.50 * w2 + 1.50 * gate
+  prob_tx <- pmin(pmax(stats::plogis(logit_p_tx), 0.02), 0.98)
   tx_obs <- stats::rbinom(n, 1, prob_tx)
 
   # 3. Treatment Initiation Day d in {1, ..., grace_period}
@@ -47,9 +47,9 @@ generate_scenario4_data <- function(n = 1000,
     Inf
   )
 
-  # 4. Weibull Scales (Driven by non-linear w1, w2 AND non-linear prognostic w_prog)
+  # 4. Weibull Scales (Driven by non-linear w1, w2 AND centered dominant prognostic w_prog)
   lin_pred_0 <- -0.55 + 0.35 * exp(0.70 * w1_std) + 0.25 * (w1_std^2) + 0.50 * w2 + 0.45 * gate +
-    0.55 * exp(0.55 * w_prog) + 0.25 * (w_prog^2)
+    1.80 * (exp(0.55 * w_prog) - 1.16) + 0.40 * (w_prog^2 - 1)
   scale_0 <- base_scale * exp(-lin_pred_0 / shape)
   indiv_hr <- hr_target * exp(0.15 * w1_std)
   scale_t <- scale_0 * (indiv_hr)^(-1 / shape)

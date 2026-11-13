@@ -18,7 +18,7 @@ source("sim/run_simulation_condition.R")
 run_100iter_benchmark <- function(n = 1000,
                                   n_iter = 100,
                                   batch_size = 10,
-                                  scenarios = 1:8,
+                                  scenarios = 1:6,
                                   n_cores = 10,
                                   base_seed = 2026,
                                   out_csv = "sim/simulation_results_100iter.csv",
@@ -30,21 +30,19 @@ run_100iter_benchmark <- function(n = 1000,
   dir.create(checkpoint_dir, recursive = TRUE, showWarnings = FALSE)
 
   cat("=================================================================================\n")
-  cat(sprintf("PRECOMPUTING ORACLE GROUND TRUTH FOR SCENARIOS 1 TO 8 (N_oracle = 200,000)...\n"))
+  cat(sprintf("PRECOMPUTING ORACLE GROUND TRUTH FOR SCENARIOS 1 TO 6 (N_oracle = 200,000)...\n"))
   truth_list <- list(
     `1` = compute_scenario1_truth(),
     `2` = compute_scenario2_truth(),
     `3` = compute_scenario3_truth(),
     `4` = compute_scenario4_truth(),
     `5` = compute_scenario5_truth(),
-    `6` = compute_scenario6_truth(),
-    `7` = compute_scenario7_truth(),
-    `8` = compute_scenario8_truth()
+    `6` = compute_scenario8_truth()
   )
   cat("Oracle ground truths precomputed successfully!\n")
   cat("=================================================================================\n")
   cat(sprintf("STARTING 100-ITERATION BENCHMARK (N = %d, B = %d datasets per scenario)\n", n, n_iter))
-  cat(sprintf("Scenarios: 1 to 8 | 800 total datasets | Parallelizing across %d CPU cores\n", n_cores))
+  cat(sprintf("Scenarios: 1 to 6 | 600 total datasets | Parallelizing across %d CPU cores\n", n_cores))
   cat("=================================================================================\n")
 
   n_batches <- ceiling(n_iter / batch_size)

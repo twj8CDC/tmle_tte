@@ -103,9 +103,7 @@ generate_100iter_plots <- function(rds_path = "sim/simulation_results_100iter.rd
     "Scenario 3" = "Scenario 3: Non-Proportional Hazards & Day-15 Treatment Efficacy Waning",
     "Scenario 4" = "Scenario 4: Strong Prognostic Covariate (Variance Reduction & Efficiency)",
     "Scenario 5" = "Scenario 5: Severe Positivity Strain (Near-Violations in Frail Subgroups)",
-    "Scenario 6" = "Scenario 6: Time-Varying Confounder Feedback (Day-3 Biomarker Collider Trap)",
-    "Scenario 7" = "Scenario 7: Positivity Tail Depletion & Empty-Cell Support Bias (Sparse Tail)",
-    "Scenario 8" = "Scenario 8: Depletion of Susceptibles & Survivor Collider Bias (Unmeasured Frailty)"
+    "Scenario 6" = "Scenario 6: Depletion of Susceptibles & Survivor Collider Bias (Unmeasured Frailty)"
   )
 
   # Color, fill, and shape definitions per y_label
@@ -151,7 +149,7 @@ generate_100iter_plots <- function(rds_path = "sim/simulation_results_100iter.rd
     "TTE-TMLE (BART)"            = 24
   )
 
-  make_cell_plot <- function(data, metric_col, title_str, ref_val = NA_real_, is_leftmost = FALSE) {
+  make_cell_plot <- function(data, metric_col, title_str, ref_val = NA_real_, is_leftmost = FALSE, x_limits = NULL) {
     p <- ggplot(data, aes(x = .data[[metric_col]], y = y_label, color = y_label, fill = y_label, shape = y_label)) +
       geom_hline(yintercept = c(3.5, 6.5), linetype = "dashed", color = "#BBBBBB", linewidth = 0.5)
 
@@ -172,6 +170,7 @@ generate_100iter_plots <- function(rds_path = "sim/simulation_results_100iter.rd
       scale_fill_manual(values = label_fills, drop = FALSE) +
       scale_shape_manual(values = label_shapes, drop = FALSE) +
       scale_y_discrete(drop = FALSE) +
+      coord_cartesian(xlim = x_limits) +
       labs(title = title_str, x = NULL, y = NULL) +
       theme_bw(base_size = 9) +
       theme(
@@ -186,39 +185,62 @@ generate_100iter_plots <- function(rds_path = "sim/simulation_results_100iter.rd
     p
   }
 
-  for (s_idx in 1:8) {
+  # Shared group x-axis limits ACROSS ALL SCENARIOS: max(metric over group) + 10%
+  lim_rd_bias  <- max(abs(c(summary_df[["RD(15) Bias"]], summary_df[["RD(30) Bias"]])), na.rm = TRUE) * 1.1
+  lim_rm_bias  <- max(abs(summary_df[["RMSTD Bias (Days)"]]), na.rm = TRUE) * 1.1
+  lim_hr_bias  <- max(abs(summary_df[["Marginal HR Bias"]]), na.rm = TRUE) * 1.1
+
+  lim_rd_rmse  <- max(c(summary_df[["RD(15) RMSE"]], summary_df[["RD(30) RMSE"]]), na.rm = TRUE) * 1.1
+  lim_rm_rmse  <- max(summary_df[["RMSTD RMSE (Days)"]], na.rm = TRUE) * 1.1
+  lim_hr_rmse  <- max(summary_df[["Marginal HR RMSE"]], na.rm = TRUE) * 1.1
+
+  all_cov <- c(
+    summary_df[["RD(15) 95% Cov (%)"]], summary_df[["RD(30) 95% Cov (%)"]],
+    summary_df[["RMSTD 95% Cov (%)"]], summary_df[["Marginal HR 95% Cov (%)"]],
+    summary_df[["Uniform Band Cov (%)"]], summary_df[["Mean Pointwise Band Cov (%)"]]
+  )
+  lim_cov <- c(max(0, floor(min(all_cov, na.rm = TRUE) / 10) * 10 - 5), 102)
+
+  lim_rd_ciw   <- max(c(summary_df[["RD(15) 95% CI Width"]], summary_df[["RD(30) 95% CI Width"]]), na.rm = TRUE) * 1.1
+  lim_rm_ciw   <- max(summary_df[["RMSTD 95% CI Width"]], na.rm = TRUE) * 1.1
+  lim_hr_ciw   <- max(summary_df[["Marginal HR 95% CI Width"]], na.rm = TRUE) * 1.1
+
+  lim_se_ratio <- c(0, max(summary_df[["SE Ratio [RD(30)]"]], na.rm = TRUE) * 1.1)
+  lim_band_w   <- c(0, max(summary_df[["Mean Band Width"]], na.rm = TRUE) * 1.1)
+
+  for (s_idx in 1:6) {
     s_name <- paste0("Scenario ", s_idx)
     s_sub <- summary_df %>% filter(scenario_id == s_name)
 
     # ROW 1: Bias
-    p11 <- make_cell_plot(s_sub, "RD(15) Bias", "Bias: RD(15)", ref_val = 0, is_leftmost = TRUE)
-    p12 <- make_cell_plot(s_sub, "RD(30) Bias", "Bias: RD(30)", ref_val = 0, is_leftmost = FALSE)
-    p13 <- make_cell_plot(s_sub, "RMSTD Bias (Days)", "Bias: RMSTD(30) (Days)", ref_val = 0, is_leftmost = FALSE)
-    p14 <- make_cell_plot(s_sub, "Marginal HR Bias", "Bias: Marginal HR(30)", ref_val = 0, is_leftmost = FALSE)
+    p11 <- make_cell_plot(s_sub, "RD(15) Bias", "Bias: RD(15)", ref_val = 0, is_leftmost = TRUE, x_limits = c(-lim_rd_bias, lim_rd_bias))
+    p12 <- make_cell_plot(s_sub, "RD(30) Bias", "Bias: RD(30)", ref_val = 0, is_leftmost = FALSE, x_limits = c(-lim_rd_bias, lim_rd_bias))
+    p13 <- make_cell_plot(s_sub, "RMSTD Bias (Days)", "Bias: RMSTD(30) (Days)", ref_val = 0, is_leftmost = FALSE, x_limits = c(-lim_rm_bias, lim_rm_bias))
+    p14 <- make_cell_plot(s_sub, "Marginal HR Bias", "Bias: Marginal HR(30)", ref_val = 0, is_leftmost = FALSE, x_limits = c(-lim_hr_bias, lim_hr_bias))
 
     # ROW 2: RMSE
-    p21 <- make_cell_plot(s_sub, "RD(15) RMSE", "RMSE: RD(15)", ref_val = 0, is_leftmost = TRUE)
-    p22 <- make_cell_plot(s_sub, "RD(30) RMSE", "RMSE: RD(30)", ref_val = 0, is_leftmost = FALSE)
-    p23 <- make_cell_plot(s_sub, "RMSTD RMSE (Days)", "RMSE: RMSTD(30) (Days)", ref_val = 0, is_leftmost = FALSE)
-    p24 <- make_cell_plot(s_sub, "Marginal HR RMSE", "RMSE: Marginal HR(30)", ref_val = 0, is_leftmost = FALSE)
+    p21 <- make_cell_plot(s_sub, "RD(15) RMSE", "RMSE: RD(15)", ref_val = 0, is_leftmost = TRUE, x_limits = c(0, lim_rd_rmse))
+    p22 <- make_cell_plot(s_sub, "RD(30) RMSE", "RMSE: RD(30)", ref_val = 0, is_leftmost = FALSE, x_limits = c(0, lim_rd_rmse))
+    p23 <- make_cell_plot(s_sub, "RMSTD RMSE (Days)", "RMSE: RMSTD(30) (Days)", ref_val = 0, is_leftmost = FALSE, x_limits = c(0, lim_rm_rmse))
+    p24 <- make_cell_plot(s_sub, "Marginal HR RMSE", "RMSE: Marginal HR(30)", ref_val = 0, is_leftmost = FALSE, x_limits = c(0, lim_hr_rmse))
 
     # ROW 3: 95% Coverage (%)
-    p31 <- make_cell_plot(s_sub, "RD(15) 95% Cov (%)", "95% Cov (%): RD(15)", ref_val = 95, is_leftmost = TRUE)
-    p32 <- make_cell_plot(s_sub, "RD(30) 95% Cov (%)", "95% Cov (%): RD(30)", ref_val = 95, is_leftmost = FALSE)
-    p33 <- make_cell_plot(s_sub, "RMSTD 95% Cov (%)", "95% Cov (%): RMSTD(30)", ref_val = 95, is_leftmost = FALSE)
-    p34 <- make_cell_plot(s_sub, "Marginal HR 95% Cov (%)", "95% Cov (%): Marginal HR(30)", ref_val = 95, is_leftmost = FALSE)
+    p31 <- make_cell_plot(s_sub, "RD(15) 95% Cov (%)", "95% Cov (%): RD(15)", ref_val = 95, is_leftmost = TRUE, x_limits = lim_cov)
+    p32 <- make_cell_plot(s_sub, "RD(30) 95% Cov (%)", "95% Cov (%): RD(30)", ref_val = 95, is_leftmost = FALSE, x_limits = lim_cov)
+    p33 <- make_cell_plot(s_sub, "RMSTD 95% Cov (%)", "95% Cov (%): RMSTD(30)", ref_val = 95, is_leftmost = FALSE, x_limits = lim_cov)
+    p34 <- make_cell_plot(s_sub, "Marginal HR 95% Cov (%)", "95% Cov (%): Marginal HR(30)", ref_val = 95, is_leftmost = FALSE, x_limits = lim_cov)
 
     # ROW 4: 95% CI Width
-    p41 <- make_cell_plot(s_sub, "RD(15) 95% CI Width", "CI Width: RD(15)", ref_val = NA, is_leftmost = TRUE)
-    p42 <- make_cell_plot(s_sub, "RD(30) 95% CI Width", "CI Width: RD(30)", ref_val = NA, is_leftmost = FALSE)
-    p43 <- make_cell_plot(s_sub, "RMSTD 95% CI Width", "CI Width: RMSTD(30)", ref_val = NA, is_leftmost = FALSE)
-    p44 <- make_cell_plot(s_sub, "Marginal HR 95% CI Width", "CI Width: Marginal HR(30)", ref_val = NA, is_leftmost = FALSE)
+    p41 <- make_cell_plot(s_sub, "RD(15) 95% CI Width", "CI Width: RD(15)", ref_val = NA, is_leftmost = TRUE, x_limits = c(0, lim_rd_ciw))
+    p42 <- make_cell_plot(s_sub, "RD(30) 95% CI Width", "CI Width: RD(30)", ref_val = NA, is_leftmost = FALSE, x_limits = c(0, lim_rd_ciw))
+    p43 <- make_cell_plot(s_sub, "RMSTD 95% CI Width", "CI Width: RMSTD(30)", ref_val = NA, is_leftmost = FALSE, x_limits = c(0, lim_rm_ciw))
+    p44 <- make_cell_plot(s_sub, "Marginal HR 95% CI Width", "CI Width: Marginal HR(30)", ref_val = NA, is_leftmost = FALSE, x_limits = c(0, lim_hr_ciw))
 
     # ROW 5: Diagnostics
-    p51 <- make_cell_plot(s_sub, "SE Ratio [RD(30)]", "SE Ratio [RD(30)]", ref_val = 1.0, is_leftmost = TRUE)
-    p52 <- make_cell_plot(s_sub, "Uniform Band Cov (%)", "Uniform Band Cov (%)", ref_val = 95, is_leftmost = FALSE)
-    p53 <- make_cell_plot(s_sub, "Mean Pointwise Band Cov (%)", "Pointwise Band Cov (%)", ref_val = 95, is_leftmost = FALSE)
-    p54 <- make_cell_plot(s_sub, "Mean Band Width", "Mean Band Width", ref_val = NA, is_leftmost = FALSE)
+    p51 <- make_cell_plot(s_sub, "SE Ratio [RD(30)]", "SE Ratio [RD(30)]", ref_val = 1.0, is_leftmost = TRUE, x_limits = lim_se_ratio)
+    p52 <- make_cell_plot(s_sub, "Uniform Band Cov (%)", "Uniform Band Cov (%)", ref_val = 95, is_leftmost = FALSE, x_limits = lim_cov)
+    p53 <- make_cell_plot(s_sub, "Mean Pointwise Band Cov (%)", "Pointwise Band Cov (%)", ref_val = 95, is_leftmost = FALSE, x_limits = lim_cov)
+    p54 <- make_cell_plot(s_sub, "Mean Band Width", "Mean Band Width", ref_val = NA, is_leftmost = FALSE, x_limits = lim_band_w)
 
     r1 <- p11 + p12 + p13 + p14 + plot_layout(ncol = 4, widths = c(1.4, 1, 1, 1))
     r2 <- p21 + p22 + p23 + p24 + plot_layout(ncol = 4, widths = c(1.4, 1, 1, 1))

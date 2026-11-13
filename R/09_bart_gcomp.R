@@ -429,6 +429,8 @@ compute_bart_ipcw_and_cf <- function(base_ord,
 fit_bart_pair <- function(data,
                           clones,
                           covars = c("w1", "w2"),
+                          p_covars = covars,
+                          q_covars = covars,
                           grace_period = 10,
                           tau = 30,
                           ntree = 50,
@@ -469,16 +471,16 @@ fit_bart_pair <- function(data,
     )
 
   X_g_train <- obs_panel_g %>%
-    dplyr::select(t, dplyr::all_of(covars)) %>%
+    dplyr::select(t, dplyr::all_of(p_covars)) %>%
     as.matrix()
   Y_g_train <- obs_panel_g$event_tx
 
   # Prediction grid for BART-g: every sorted patient i across t = 1..n_grace_int
   g_grid <- base_ord %>%
-    dplyr::select(id, dplyr::all_of(covars)) %>%
+    dplyr::select(id, dplyr::all_of(p_covars)) %>%
     tidyr::uncount(weights = n_grace_int, .id = "t")
   X_g_test <- g_grid %>%
-    dplyr::select(t, dplyr::all_of(covars)) %>%
+    dplyr::select(t, dplyr::all_of(p_covars)) %>%
     as.matrix()
 
   # 2. Build cloned person-time panel for BART-Q (ordered by id, clone_arm, t)
@@ -492,24 +494,24 @@ fit_bart_pair <- function(data,
     dplyr::arrange(id, clone_arm, t)
 
   X_q_train <- panel_q %>%
-    dplyr::select(t, dplyr::all_of(covars), is_treated) %>%
+    dplyr::select(t, dplyr::all_of(q_covars), is_treated) %>%
     as.matrix()
   Y_q_train <- panel_q$event_cc_day
   n_train <- nrow(X_q_train)
 
   # 3. Build pure untreated (is_treated = 0) and pure treated (is_treated = 1) grids on sorted patients
   cf_base <- base_ord %>%
-    dplyr::select(id, dplyr::all_of(covars)) %>%
+    dplyr::select(id, dplyr::all_of(q_covars)) %>%
     tidyr::uncount(weights = tau, .id = "t")
 
   cf_0 <- cf_base %>%
     dplyr::mutate(is_treated = 0L) %>%
-    dplyr::select(t, dplyr::all_of(covars), is_treated) %>%
+    dplyr::select(t, dplyr::all_of(q_covars), is_treated) %>%
     as.matrix()
 
   cf_1 <- cf_base %>%
     dplyr::mutate(is_treated = 1L) %>%
-    dplyr::select(t, dplyr::all_of(covars), is_treated) %>%
+    dplyr::select(t, dplyr::all_of(q_covars), is_treated) %>%
     as.matrix()
 
   X_q_test <- rbind(X_q_train, cf_0, cf_1)
@@ -541,7 +543,7 @@ fit_bart_pair <- function(data,
     base_ord = base_ord,
     clones = clones,
     g_grid_pred = py_out$g_pred_mean,
-    covars = covars,
+    covars = p_covars,
     grace_period = grace_period,
     tau = tau,
     max_weight = max_weight,
@@ -893,6 +895,8 @@ fit_bart_gcomp <- function(data,
 fit_bart_tmle <- function(data,
                           clones,
                           covars = c("w1", "w2"),
+                          p_covars = covars,
+                          q_covars = covars,
                           grace_period = 10,
                           tau = 30,
                           ntree = 50,
@@ -913,6 +917,8 @@ fit_bart_tmle <- function(data,
     data = data,
     clones = clones,
     covars = covars,
+    p_covars = p_covars,
+    q_covars = q_covars,
     grace_period = grace_period,
     tau = tau,
     ntree = ntree,
